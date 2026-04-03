@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Rust checks (no GPU required)
+  rust-check:
+    name: Check & Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy (no GPU, placeholder PTX)
+        run: cargo clippy -- -D warnings
+
+  # GPU tests run on self-hosted runner with NVIDIA GPU
+  gpu-test:
+    name: GPU Tests
+    runs-on: [self-hosted, gpu]
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify CUDA
+        run: nvcc --version
+      - name: Run tests
+        run: cargo test --workspace
+      - name: Clippy
+        run: cargo clippy -- -D warnings

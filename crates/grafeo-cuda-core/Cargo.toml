@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "GPU device management and CSR bridge for Grafeo."
+keywords = ["gpu", "cuda", "graph", "csr", "grafeo"]
+categories = ["database", "science", "algorithms"]
 
 [dependencies]
 grafeo-engine.workspace = true

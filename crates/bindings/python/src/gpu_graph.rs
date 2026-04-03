@@ -3,16 +3,14 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use grafeo_cuda_algos::bfs::BfsResult;
-use grafeo_cuda_algos::pagerank::PageRankResult;
-use grafeo_cuda_algos::triangle_counting::TriangleCountResult;
+use grafeo_cuda_algos::{bfs, k_truss, pagerank, triangle_counting};
 use grafeo_cuda_core::device::GpuDevice;
 use grafeo_cuda_core::gpu_graph::GpuGraph;
 
 /// A CUDA GPU device.
 #[pyclass(name = "GpuDevice")]
 pub struct PyGpuDevice {
-    inner: GpuDevice,
+    pub(crate) inner: GpuDevice,
 }
 
 #[pymethods]
@@ -31,11 +29,15 @@ impl PyGpuDevice {
     fn name(&self) -> String {
         self.inner.properties().name.clone()
     }
+
+    /// Total GPU memory in bytes.
+    #[getter]
+    fn total_memory(&self) -> usize {
+        self.inner.properties().total_memory
+    }
 }
 
 /// A graph stored in GPU memory (CSR format).
-///
-/// Create from a Grafeo database via `GpuGraph.from_grafeo(db, device)`.
 #[pyclass(name = "GpuGraph")]
 pub struct PyGpuGraph {
     inner: GpuGraph,
@@ -43,26 +45,7 @@ pub struct PyGpuGraph {
 
 #[pymethods]
 impl PyGpuGraph {
-    /// Transfer a Grafeo graph to GPU memory.
-    ///
-    /// Args:
-    ///     db: A GrafeoDB instance.
-    ///     device: A GpuDevice instance.
-    ///
-    /// Returns:
-    ///     A GpuGraph ready for GPU algorithm execution.
-    #[staticmethod]
-    fn from_grafeo(db: &Bound<'_, PyAny>, device: &PyGpuDevice) -> PyResult<Self> {
-        // TODO: extract GrafeoDB from the Python object via PyO3's ABI.
-        // This requires grafeo-python to expose the inner Arc<RwLock<GrafeoDB>>
-        // or a method to export CSR arrays directly.
-        Err(pyo3::exceptions::PyNotImplementedError::new_err(
-            "from_grafeo() requires grafeo-python to expose its inner database handle. \
-             Use from_csr() as a workaround.",
-        ))
-    }
-
-    /// Create a GpuGraph from raw CSR arrays (for benchmarking).
+    /// Create a GpuGraph from raw CSR arrays.
     ///
     /// Args:
     ///     offsets (list[int]): CSR row pointer array.
@@ -92,9 +75,7 @@ impl PyGpuGraph {
     /// Returns:
     ///     dict with keys 'total_triangles' (int) and 'time_seconds' (float).
     fn triangle_count<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
-        let result = self
-            .inner
-            .triangle_count()
+        let result = triangle_counting::triangle_count(&self.inner)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let dict = PyDict::new(py);
@@ -121,9 +102,7 @@ impl PyGpuGraph {
         max_iterations: u32,
         tolerance: f32,
     ) -> PyResult<Bound<'py, PyDict>> {
-        let result = self
-            .inner
-            .pagerank(damping, max_iterations, tolerance)
+        let result = pagerank::pagerank(&self.inner, damping, max_iterations, tolerance)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let dict = PyDict::new(py);
@@ -143,15 +122,33 @@ impl PyGpuGraph {
     ///     dict with keys 'distances' (list[int]), 'reachable' (int),
     ///     'max_depth' (int), 'time_seconds' (float).
     fn bfs<'py>(&self, py: Python<'py>, source: u32) -> PyResult<Bound<'py, PyDict>> {
-        let result = self
-            .inner
-            .bfs(source)
+        let result = bfs::bfs(&self.inner, source)
             .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
 
         let dict = PyDict::new(py);
         dict.set_item("distances", result.distances)?;
         dict.set_item("reachable", result.reachable)?;
         dict.set_item("max_depth", result.max_depth)?;
+        dict.set_item("time_seconds", result.time_seconds)?;
+        Ok(dict)
+    }
+
+    /// Extract the k-truss from the graph.
+    ///
+    /// Args:
+    ///     k (int): Truss number (minimum 3).
+    ///
+    /// Returns:
+    ///     dict with keys 'edges' (list[tuple[int,int]]), 'k' (int),
+    ///     'iterations' (int), 'time_seconds' (float).
+    fn k_truss<'py>(&self, py: Python<'py>, k: u32) -> PyResult<Bound<'py, PyDict>> {
+        let result = k_truss::k_truss(&self.inner, k)
+            .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+
+        let dict = PyDict::new(py);
+        dict.set_item("edges", result.edges)?;
+        dict.set_item("k", result.k)?;
+        dict.set_item("iterations", result.iterations)?;
         dict.set_item("time_seconds", result.time_seconds)?;
         Ok(dict)
     }

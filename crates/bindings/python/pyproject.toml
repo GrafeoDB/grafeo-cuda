@@ -1,0 +1,31 @@
+[build-system]
+requires = ["maturin>=1.11.5"]
+build-backend = "maturin"
+
+[project]
+name = "grafeo-cuda"
+version = "0.1.0"
+description = "GPU-accelerated graph algorithms for the Grafeo graph database"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.12"
+authors = [{ name = "S.T. Grond" }]
+keywords = ["graph", "gpu", "cuda", "database", "grafeo", "triangle-counting", "bfs", "pagerank"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+]
+
+[project.urls]
+Repository = "https://github.com/GrafeoDB/grafeo-cuda"
+Documentation = "https://github.com/GrafeoDB/grafeo-cuda#readme"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+module-name = "grafeo_cuda"

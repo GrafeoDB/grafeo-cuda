@@ -24,11 +24,11 @@ description = "GPU-accelerated graph algorithms for the Grafeo graph database."
 grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.1.0" }
 grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.1.0" }
 
-# Grafeo (local path for development)
-grafeo-engine = { path = "../grafeo/crates/grafeo-engine", features = ["algos", "gql"] }
-grafeo-adapters = { path = "../grafeo/crates/grafeo-adapters", features = ["gql", "algos"] }
-grafeo-core = { path = "../grafeo/crates/grafeo-core" }
-grafeo-common = { path = "../grafeo/crates/grafeo-common" }
+# Grafeo (path for development, version for publishing)
+grafeo-engine = { path = "../grafeo/crates/grafeo-engine", version = "0.5.33", features = ["algos", "gql"] }
+grafeo-adapters = { path = "../grafeo/crates/grafeo-adapters", version = "0.5.33", features = ["gql", "algos"] }
+grafeo-core = { path = "../grafeo/crates/grafeo-core", version = "0.5.33" }
+grafeo-common = { path = "../grafeo/crates/grafeo-common", version = "0.5.33" }
 
 # GPU
 cudarc = { version = "0.19", features = ["driver", "nvrtc", "cuda-version-from-build-system"] }

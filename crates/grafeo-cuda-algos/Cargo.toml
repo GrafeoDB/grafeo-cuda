@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "GPU-accelerated graph algorithms for Grafeo (triangle counting, BFS, PageRank, k-truss)."
+keywords = ["gpu", "cuda", "graph", "algorithms", "grafeo"]
+categories = ["database", "science", "algorithms"]
 
 [[bin]]
 name = "gpu-triangles"
