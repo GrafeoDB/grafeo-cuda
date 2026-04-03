@@ -1,0 +1,19 @@
+[package]
+name = "grafeo-cuda-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "GPU device management and CSR bridge for Grafeo."
+
+[dependencies]
+grafeo-engine.workspace = true
+grafeo-core.workspace = true
+grafeo-common.workspace = true
+cudarc.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

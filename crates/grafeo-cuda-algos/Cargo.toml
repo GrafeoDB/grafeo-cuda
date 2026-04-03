@@ -1,0 +1,41 @@
+[package]
+name = "grafeo-cuda-algos"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "GPU-accelerated graph algorithms for Grafeo (triangle counting, BFS, PageRank, k-truss)."
+
+[[bin]]
+name = "gpu-triangles"
+path = "src/bin/gpu_triangles.rs"
+
+[[bin]]
+name = "gpu-pagerank"
+path = "src/bin/gpu_pagerank.rs"
+
+[[bin]]
+name = "gpu-bfs"
+path = "src/bin/gpu_bfs.rs"
+
+[[bin]]
+name = "gpu-ktruss"
+path = "src/bin/gpu_ktruss.rs"
+
+[dependencies]
+grafeo-cuda-core.workspace = true
+grafeo-engine.workspace = true
+grafeo-core.workspace = true
+cudarc.workspace = true
+thiserror.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+grafeo-adapters.workspace = true
+
+[lints]
+workspace = true

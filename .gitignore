@@ -1,0 +1,6 @@
+target/
+kernels/compiled/
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/

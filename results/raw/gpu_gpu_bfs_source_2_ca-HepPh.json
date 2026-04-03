@@ -1,0 +1,24 @@
+{
+  "dataset": "H:/GraphChallenge/datasets/snap/ca-HepPh.tsv",
+  "algorithm": "gpu_bfs_source_2",
+  "vertices": 12008,
+  "edges": 237010,
+  "time_s": 0.0162663,
+  "transfer_time_s": 0.015705,
+  "kernel_time_s": 0.0005613,
+  "teps": 422251915.19686437,
+  "runs": [
+    0.0007022,
+    0.0005613,
+    0.0009079,
+    0.0018315,
+    0.0009756
+  ],
+  "platform": "windows / x86_64 / KIRUNA / GPU: NVIDIA GeForce RTX 4090",
+  "gpu_device": "NVIDIA GeForce RTX 4090",
+  "extra": {
+    "max_depth": 9,
+    "reachable_nodes": 11204,
+    "source_node": 6004
+  }
+}

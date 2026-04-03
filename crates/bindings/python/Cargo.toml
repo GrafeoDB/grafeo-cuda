@@ -1,0 +1,22 @@
+[package]
+name = "grafeo-cuda-python"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Python bindings for GPU-accelerated Grafeo graph algorithms."
+
+[lib]
+name = "grafeo_cuda"
+crate-type = ["cdylib"]
+
+[dependencies]
+grafeo-cuda-core.workspace = true
+grafeo-cuda-algos.workspace = true
+grafeo-engine.workspace = true
+pyo3 = { workspace = true, features = ["extension-module"] }
+
+[lints]
+workspace = true
