@@ -17,6 +17,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: GrafeoDB/grafeo
+          path: ../grafeo
       - uses: dtolnay/rust-toolchain@stable
       - name: Publish grafeo-cuda-core
         run: cargo publish -p grafeo-cuda-core --no-verify || echo "Already published or skipped"
