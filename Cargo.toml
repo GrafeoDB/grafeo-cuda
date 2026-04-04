@@ -11,7 +11,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.91.1"
 license = "Apache-2.0"
@@ -21,8 +21,8 @@ description = "GPU-accelerated graph algorithms for the Grafeo graph database."
 
 [workspace.dependencies]
 # Internal crates
-grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.1.0" }
-grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.1.0" }
+grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.1.1" }
+grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.1.1" }
 
 # Grafeo (path for local dev, version for crates.io publish)
 grafeo-engine = { path = "../grafeo/crates/grafeo-engine", version = "0.5.33", features = ["algos", "gql"] }
