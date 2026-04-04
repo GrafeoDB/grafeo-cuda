@@ -8,7 +8,7 @@ pub mod device;
 pub mod error;
 pub mod gpu_graph;
 
-pub use csr_export::{CsrArrays, export_to_csr, from_edge_pairs, parse_tsv_to_edges};
+pub use csr_export::{CsrArrays, export_to_csr, from_edge_pairs, from_edge_pairs_oriented, parse_tsv_to_edges};
 pub use device::{DeviceProperties, GpuDevice};
 pub use error::CudaError;
 pub use gpu_graph::GpuGraph;

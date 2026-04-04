@@ -164,6 +164,69 @@ pub fn parse_tsv_to_edges(path: &std::path::Path) -> std::io::Result<(Vec<(u32, 
     Ok((edges, next_id))
 }
 
+/// Build a degree-oriented CSR from edge pairs.
+///
+/// Each undirected edge is stored once, directed from the lower-degree endpoint
+/// to the higher-degree endpoint (ties broken by vertex ID). This produces a DAG
+/// where the maximum out-degree is O(√m), dramatically reducing intersection work
+/// for triangle counting.
+///
+/// The resulting CSR has roughly half the entries of a symmetric CSR.
+/// Each triangle in the graph is enumerable exactly once: for edge u→v,
+/// any w ∈ N_out(u) ∩ N_out(v) forms a unique triangle (u, v, w).
+pub fn from_edge_pairs_oriented(edges: &[(u32, u32)], num_nodes: u32) -> CsrArrays {
+    let n = num_nodes as usize;
+
+    // Step 1: Build undirected edge set as canonical (min, max) pairs.
+    let mut undirected: Vec<(u32, u32)> = Vec::with_capacity(edges.len());
+    for &(src, dst) in edges {
+        if src != dst {
+            undirected.push((src.min(dst), src.max(dst)));
+        }
+    }
+    undirected.sort_unstable();
+    undirected.dedup();
+
+    // Step 2: Compute undirected degree of each node.
+    let mut degree = vec![0u32; n];
+    for &(u, v) in &undirected {
+        degree[u as usize] += 1;
+        degree[v as usize] += 1;
+    }
+
+    // Step 3: Orient each edge from lower-degree to higher-degree vertex.
+    let mut oriented: Vec<(u32, u32)> = Vec::with_capacity(undirected.len());
+    for &(u, v) in &undirected {
+        let du = degree[u as usize];
+        let dv = degree[v as usize];
+        if du < dv || (du == dv && u < v) {
+            oriented.push((u, v));
+        } else {
+            oriented.push((v, u));
+        }
+    }
+
+    // Step 4: Sort by source and build CSR.
+    oriented.sort_unstable();
+
+    let mut offsets = vec![0u32; n + 1];
+    for &(src, _) in &oriented {
+        offsets[src as usize + 1] += 1;
+    }
+    for i in 1..=n {
+        offsets[i] += offsets[i - 1];
+    }
+
+    let targets: Vec<u32> = oriented.iter().map(|&(_, dst)| dst).collect();
+
+    CsrArrays {
+        offsets,
+        targets,
+        num_nodes,
+        num_edges: oriented.len() as u32,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     // CSR export correctness is verified via the roundtrip and correctness

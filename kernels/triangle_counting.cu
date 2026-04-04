@@ -313,3 +313,64 @@ extern "C" __global__ void triangle_count_edge_parallel_kernel(
         atomicAdd(result, (unsigned long long)count);
     }
 }
+
+/* ---- Phase 5: Degree-oriented CSR kernel ---- */
+
+/**
+ * Triangle counting on a degree-oriented CSR (DAG).
+ *
+ * The oriented CSR stores each undirected edge once, directed from the
+ * lower-degree endpoint to the higher-degree endpoint. This means:
+ *   - offsets/targets directly encode all "forward" edges
+ *   - Each triangle (u,v,w) is counted exactly once: from edge u→v,
+ *     w appears in N_out(u) ∩ N_out(v)
+ *   - Max out-degree is O(sqrt(m)), giving much better load balance
+ *
+ * One warp per oriented edge. No auxiliary prefix-sum buffers needed.
+ */
+extern "C" __global__ void triangle_count_oriented_kernel(
+    const unsigned int* __restrict__ offsets,
+    const unsigned int* __restrict__ targets,
+    unsigned int num_nodes,
+    unsigned int num_edges,
+    unsigned long long* __restrict__ result
+) {
+    unsigned int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    unsigned int lane = threadIdx.x & 31;
+
+    if (warp_id >= num_edges) return;
+
+    /* Binary search offsets[] to find source node u for this edge */
+    unsigned int lo = 0, hi = num_nodes;
+    while (lo < hi) {
+        unsigned int mid = lo + (hi - lo) / 2;
+        if (offsets[mid + 1] <= warp_id) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    unsigned int u = lo;
+    unsigned int v = targets[warp_id];
+
+    /* Intersect out-neighbor lists of u and v in the oriented DAG */
+    unsigned int u_start = offsets[u];
+    unsigned int u_end   = offsets[u + 1];
+    unsigned int v_start = offsets[v];
+    unsigned int v_end   = offsets[v + 1];
+
+    unsigned int a_len = u_end - u_start;
+    unsigned int b_len = v_end - v_start;
+
+    if (a_len == 0 || b_len == 0) return;
+
+    unsigned int count = warp_intersect(
+        targets + u_start, a_len,
+        targets + v_start, b_len,
+        lane
+    );
+
+    if (lane == 0 && count > 0) {
+        atomicAdd(result, (unsigned long long)count);
+    }
+}

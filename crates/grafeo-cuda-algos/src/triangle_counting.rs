@@ -27,6 +27,7 @@ pub struct TriangleCountResult {
 
 const PTX: &str = include_str!("../../../kernels/compiled/triangle_counting.ptx");
 static MODULE: OnceLock<module_cache::CachedModule> = OnceLock::new();
+static MODULE_ORIENTED: OnceLock<module_cache::CachedModule> = OnceLock::new();
 
 /// Count all triangles in the graph on GPU using the edge-parallel kernel.
 ///
@@ -132,6 +133,69 @@ pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError
     .map_err(|e| CudaError::Kernel(format!("edge_parallel launch failed: {e}")))?;
 
     graph.stream.synchronize()
+        .map_err(|e| CudaError::Kernel(format!("sync failed: {e}")))?;
+
+    let result_host = graph.stream.clone_dtoh(&result_buf)?;
+    let elapsed = start.elapsed().as_secs_f64();
+
+    Ok(TriangleCountResult {
+        total_triangles: result_host[0],
+        time_seconds: elapsed,
+    })
+}
+
+/// Count triangles using a degree-oriented CSR on GPU.
+///
+/// The input `GpuGraph` must contain a degree-oriented CSR (edges directed from
+/// lower-degree to higher-degree vertex). This eliminates the forward-edge
+/// counting and prefix-sum steps, launching a single kernel directly.
+///
+/// Each triangle is counted exactly once: for oriented edge u→v, any
+/// w ∈ N_out(u) ∩ N_out(v) forms a unique triangle.
+pub fn triangle_count_oriented(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError> {
+    let start = Instant::now();
+
+    let ctx = graph.stream.context();
+    let funcs = module_cache::get_or_load(
+        &MODULE_ORIENTED,
+        ctx,
+        PTX,
+        &["triangle_count_oriented_kernel"],
+    )?;
+
+    if graph.num_edges == 0 {
+        return Ok(TriangleCountResult {
+            total_triangles: 0,
+            time_seconds: start.elapsed().as_secs_f64(),
+        });
+    }
+
+    let mut result_buf = graph.stream.clone_htod(&[0u64])?;
+
+    let threads_per_block = 256u32;
+    let total_threads = graph.num_edges * 32; // one warp per oriented edge
+    let num_blocks = total_threads.div_ceil(threads_per_block);
+
+    unsafe {
+        graph
+            .stream
+            .launch_builder(&funcs[0])
+            .arg(&graph.offsets)
+            .arg(&graph.targets)
+            .arg(&graph.num_nodes)
+            .arg(&graph.num_edges)
+            .arg(&mut result_buf)
+            .launch(LaunchConfig {
+                grid_dim: (num_blocks, 1, 1),
+                block_dim: (threads_per_block, 1, 1),
+                shared_mem_bytes: 0,
+            })
+    }
+    .map_err(|e| CudaError::Kernel(format!("oriented TC launch failed: {e}")))?;
+
+    graph
+        .stream
+        .synchronize()
         .map_err(|e| CudaError::Kernel(format!("sync failed: {e}")))?;
 
     let result_host = graph.stream.clone_dtoh(&result_buf)?;

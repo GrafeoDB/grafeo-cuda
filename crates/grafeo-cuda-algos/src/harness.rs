@@ -112,6 +112,47 @@ pub fn load_and_transfer_direct(dataset: &str, device: &GpuDevice) -> (GpuGraph,
     (gpu_graph, total)
 }
 
+/// Load a TSV edge list and build a degree-oriented CSR on GPU.
+///
+/// Returns (oriented GpuGraph, symmetric_edge_count, total_time).
+/// The symmetric edge count is needed for TEPS calculation since the oriented
+/// graph has roughly half the entries.
+pub fn load_and_transfer_direct_oriented(dataset: &str, device: &GpuDevice) -> (GpuGraph, u32, f64) {
+    let start = Instant::now();
+
+    let (edges, num_nodes) =
+        grafeo_cuda_core::parse_tsv_to_edges(Path::new(dataset)).expect("failed to parse TSV");
+    let parse_time = start.elapsed().as_secs_f64();
+    eprintln!(
+        "  Parsed {num_nodes} nodes, {} edges in {parse_time:.2}s from {dataset}",
+        edges.len()
+    );
+
+    let csr_start = Instant::now();
+    let oriented_csr = grafeo_cuda_core::from_edge_pairs_oriented(&edges, num_nodes);
+    let csr_time = csr_start.elapsed().as_secs_f64();
+    // Symmetric edge count = 2 * oriented edges (each undirected edge stored once)
+    let symmetric_edges = oriented_csr.num_edges * 2;
+    eprintln!(
+        "  Oriented CSR: {csr_time:.4}s ({} nodes, {} oriented edges, ~{} symmetric)",
+        oriented_csr.num_nodes, oriented_csr.num_edges, symmetric_edges
+    );
+
+    let xfer_start = Instant::now();
+    let gpu_graph =
+        GpuGraph::from_csr_arrays(oriented_csr, device).expect("failed to transfer graph to GPU");
+    let xfer_time = xfer_start.elapsed().as_secs_f64();
+    eprintln!("  GPU transfer: {xfer_time:.4}s");
+
+    let total = start.elapsed().as_secs_f64();
+    eprintln!(
+        "  Total (parse+CSR+transfer): {total:.4}s  [{} vertices, {} oriented edges]",
+        gpu_graph.num_nodes, gpu_graph.num_edges
+    );
+
+    (gpu_graph, symmetric_edges, total)
+}
+
 pub fn platform_info(device: &GpuDevice) -> String {
     format!(
         "{} / {} / {} / GPU: {}",
