@@ -189,3 +189,127 @@ extern "C" __global__ void triangle_count_warp_kernel(
         atomicAdd(result, local_count);
     }
 }
+
+/* ---- Phase 4: Edge-parallel with prefix-sum mapping ---- */
+
+/**
+ * Compute the number of forward edges (v > u) per node.
+ * fwd_count[u] = number of neighbors v of u where v > u.
+ */
+extern "C" __global__ void compute_forward_counts_kernel(
+    const unsigned int* __restrict__ offsets,
+    const unsigned int* __restrict__ targets,
+    unsigned int num_nodes,
+    unsigned int* __restrict__ fwd_count
+) {
+    unsigned int u = blockIdx.x * blockDim.x + threadIdx.x;
+    if (u >= num_nodes) return;
+
+    unsigned int start = offsets[u];
+    unsigned int end = offsets[u + 1];
+    unsigned int count = 0;
+
+    for (unsigned int i = start; i < end; i++) {
+        if (targets[i] > u) count++;
+    }
+    fwd_count[u] = count;
+}
+
+/**
+ * Inclusive prefix sum (scan) on fwd_count to produce fwd_offsets.
+ * fwd_offsets[0] = 0, fwd_offsets[u] = sum of fwd_count[0..u).
+ * Simple sequential kernel — called once on num_nodes elements.
+ */
+extern "C" __global__ void prefix_sum_kernel(
+    const unsigned int* __restrict__ counts,
+    unsigned int* __restrict__ offsets_out,
+    unsigned int n
+) {
+    /* Single-thread prefix sum. Fast enough for n < 10M. */
+    if (threadIdx.x != 0 || blockIdx.x != 0) return;
+
+    unsigned int running = 0;
+    for (unsigned int i = 0; i < n; i++) {
+        offsets_out[i] = running;
+        running += counts[i];
+    }
+    offsets_out[n] = running;
+}
+
+/**
+ * Edge-parallel triangle counting: one warp per forward edge (u, v) where u < v.
+ *
+ * Uses fwd_offsets[] to map global warp_id -> (u, edge_index_within_u).
+ * Binary search in fwd_offsets to find u, then linear scan to find v.
+ * Warp cooperatively intersects N(u) ∩ N(v) for common neighbors w > v.
+ */
+extern "C" __global__ void triangle_count_edge_parallel_kernel(
+    const unsigned int* __restrict__ offsets,
+    const unsigned int* __restrict__ targets,
+    const unsigned int* __restrict__ fwd_offsets,
+    unsigned int num_nodes,
+    unsigned int total_fwd_edges,
+    unsigned long long* __restrict__ result
+) {
+    unsigned int warp_id = (blockIdx.x * blockDim.x + threadIdx.x) / 32;
+    unsigned int lane = threadIdx.x & 31;
+
+    if (warp_id >= total_fwd_edges) return;
+
+    /* Binary search fwd_offsets to find which node u this edge belongs to */
+    unsigned int lo = 0, hi = num_nodes;
+    while (lo < hi) {
+        unsigned int mid = lo + (hi - lo) / 2;
+        if (fwd_offsets[mid + 1] <= warp_id) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    unsigned int u = lo;
+
+    /* Find the local edge index within u's forward neighbors */
+    unsigned int local_idx = warp_id - fwd_offsets[u];
+
+    /* Walk u's neighbors to find the local_idx-th forward neighbor */
+    unsigned int u_start = offsets[u];
+    unsigned int u_end = offsets[u + 1];
+    unsigned int fwd_seen = 0;
+    unsigned int v = u; /* will be overwritten */
+    unsigned int edge_pos = u_start;
+
+    for (unsigned int i = u_start; i < u_end; i++) {
+        if (targets[i] > u) {
+            if (fwd_seen == local_idx) {
+                v = targets[i];
+                edge_pos = i;
+                break;
+            }
+            fwd_seen++;
+        }
+    }
+
+    if (v == u) return; /* safety: should not happen */
+
+    /* Intersect N(u) and N(v) for w > v */
+    unsigned int v_start = offsets[v];
+    unsigned int v_end = offsets[v + 1];
+
+    unsigned int u_from = lower_bound(targets, edge_pos + 1, u_end, v + 1);
+    unsigned int v_from = lower_bound(targets, v_start, v_end, v + 1);
+
+    unsigned int a_len = u_end - u_from;
+    unsigned int b_len = v_end - v_from;
+
+    if (a_len == 0 || b_len == 0) return;
+
+    unsigned int count = warp_intersect(
+        targets + u_from, a_len,
+        targets + v_from, b_len,
+        lane
+    );
+
+    if (lane == 0 && count > 0) {
+        atomicAdd(result, (unsigned long long)count);
+    }
+}
