@@ -19,6 +19,10 @@ struct Args {
     #[arg(long, default_value = "1")]
     warmup: usize,
 
+    /// Direct TSV->CSR->GPU path (bypasses GrafeoDB, much faster transfer).
+    #[arg(long)]
+    direct: bool,
+
     /// Save results to JSON.
     #[arg(long)]
     save: bool,
@@ -27,7 +31,13 @@ struct Args {
 fn main() {
     let args = Args::parse();
     let device = GpuDevice::new(0).expect("No CUDA device found");
-    let (_db, gpu_graph, transfer_time) = harness::load_and_transfer(&args.dataset, &device);
+
+    let (gpu_graph, transfer_time) = if args.direct {
+        harness::load_and_transfer_direct(&args.dataset, &device)
+    } else {
+        let (_db, graph, time) = harness::load_and_transfer(&args.dataset, &device);
+        (graph, time)
+    };
 
     // Warmup
     for _ in 0..args.warmup {
@@ -78,6 +88,5 @@ fn main() {
         }
     }
 
-    // Print JSON to stdout for piping
     println!("{}", serde_json::to_string_pretty(&result).unwrap());
 }

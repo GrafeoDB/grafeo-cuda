@@ -77,6 +77,41 @@ pub fn load_and_transfer(dataset: &str, device: &GpuDevice) -> (GrafeoDB, GpuGra
     (db, gpu_graph, transfer_time)
 }
 
+/// Load a TSV edge list directly into GPU memory, bypassing GrafeoDB entirely.
+///
+/// Parses the TSV into edge pairs, builds CSR on the CPU, and transfers to GPU.
+/// Much faster than going through GrafeoDB's LpgStore for benchmark-only workloads.
+pub fn load_and_transfer_direct(dataset: &str, device: &GpuDevice) -> (GpuGraph, f64) {
+    let start = Instant::now();
+
+    let (edges, num_nodes) =
+        grafeo_cuda_core::parse_tsv_to_edges(Path::new(dataset)).expect("failed to parse TSV");
+    let parse_time = start.elapsed().as_secs_f64();
+    eprintln!("  Parsed {num_nodes} nodes, {} edges in {parse_time:.2}s from {dataset}", edges.len());
+
+    let csr_start = Instant::now();
+    let csr = grafeo_cuda_core::from_edge_pairs(&edges, num_nodes, true);
+    let csr_time = csr_start.elapsed().as_secs_f64();
+    eprintln!(
+        "  CSR build: {csr_time:.4}s ({} nodes, {} CSR entries)",
+        csr.num_nodes, csr.num_edges
+    );
+
+    let xfer_start = Instant::now();
+    let gpu_graph =
+        GpuGraph::from_csr_arrays(csr, device).expect("failed to transfer graph to GPU");
+    let xfer_time = xfer_start.elapsed().as_secs_f64();
+    eprintln!("  GPU transfer: {xfer_time:.4}s");
+
+    let total = start.elapsed().as_secs_f64();
+    eprintln!(
+        "  Total (parse+CSR+transfer): {total:.4}s  [{} vertices, {} CSR entries]",
+        gpu_graph.num_nodes, gpu_graph.num_edges
+    );
+
+    (gpu_graph, total)
+}
+
 pub fn platform_info(device: &GpuDevice) -> String {
     format!(
         "{} / {} / {} / GPU: {}",
