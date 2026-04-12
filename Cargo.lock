@@ -302,29 +302,22 @@ dependencies = [
 
 [[package]]
 name = "grafeo-adapters"
-version = "0.5.33"
+version = "0.5.37"
 dependencies = [
  "bincode",
- "byteorder",
- "bytes",
- "crc32fast",
- "crossbeam",
- "fs2",
  "grafeo-common",
  "grafeo-core",
  "hashbrown 0.16.1",
- "memmap2",
  "parking_lot",
  "rayon",
  "serde",
  "smallvec",
  "thiserror",
- "tokio",
 ]
 
 [[package]]
 name = "grafeo-common"
-version = "0.5.33"
+version = "0.5.37"
 dependencies = [
  "arcstr",
  "bincode",
@@ -343,11 +336,13 @@ dependencies = [
 
 [[package]]
 name = "grafeo-core"
-version = "0.5.33"
+version = "0.5.37"
 dependencies = [
  "arcstr",
+ "bincode",
  "byteorder",
  "bytes",
+ "crc32fast",
  "crossbeam",
  "dashmap",
  "foldhash",
@@ -360,7 +355,6 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror",
- "tokio",
  "unicode-normalization",
 ]
 
@@ -402,15 +396,17 @@ dependencies = [
 
 [[package]]
 name = "grafeo-engine"
-version = "0.5.33"
+version = "0.5.37"
 dependencies = [
  "anyhow",
  "arcstr",
  "bincode",
+ "crc32fast",
  "crossbeam",
  "grafeo-adapters",
  "grafeo-common",
  "grafeo-core",
+ "grafeo-storage",
  "hashbrown 0.16.1",
  "indexmap",
  "parking_lot",
@@ -419,6 +415,24 @@ dependencies = [
  "serde",
  "smallvec",
  "thiserror",
+]
+
+[[package]]
+name = "grafeo-storage"
+version = "0.5.37"
+dependencies = [
+ "bincode",
+ "byteorder",
+ "bytes",
+ "crc32fast",
+ "crossbeam",
+ "fs2",
+ "grafeo-common",
+ "memmap2",
+ "parking_lot",
+ "serde",
+ "thiserror",
+ "tokio",
 ]
 
 [[package]]
@@ -436,6 +450,8 @@ dependencies = [
  "allocator-api2",
  "equivalent",
  "foldhash",
+ "serde",
+ "serde_core",
 ]
 
 [[package]]
