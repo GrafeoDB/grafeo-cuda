@@ -11,23 +11,61 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
-  rust-check:
-    name: Check & Clippy
+  # Hosted runners have no GPU and no CUDA toolkit, and need neither: Grafeo
+  # comes from crates.io, cudarc loads the CUDA driver at runtime, and the
+  # kernels are the PTX committed in crates/grafeo-cuda-algos/kernels/ptx/.
+  # Tests that need a GPU are marked `#[ignore = "needs a CUDA device"]` and
+  # only run in the gpu-test job.
+  check:
+    name: Format, Clippy & PTX
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Check formatting
-        run: cargo fmt --check
-      - name: Clippy (no GPU, placeholder PTX)
-        run: cargo clippy -- -D warnings
+        run: cargo fmt --all --check
+      - name: Check committed PTX matches the kernel sources
+        run: cargo xtask check-ptx
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: CPU tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run tests (GPU tests are ignored)
+        run: cargo test --workspace
+
+  msrv:
+    name: MSRV (1.91.1)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.91.1
+      - uses: Swatinem/rust-cache@v2
+      - name: Check
+        run: cargo check --workspace --all-targets
+
+  package:
+    name: Package (no CUDA toolkit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Builds each crate from its packaged files only, as crates.io users do.
+      - name: Package and verify the crates.io crates
+        run: cargo package --workspace --exclude xtask --exclude grafeo-cuda-python
 
   gpu-test:
     name: GPU Tests
@@ -35,15 +73,15 @@ jobs:
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Verify CUDA
         run: nvcc --version
-      - name: Run tests
-        run: cargo test --workspace
-      - name: Clippy
-        run: cargo clippy -- -D warnings
+      - name: All tests against the committed PTX
+        run: cargo test --workspace -- --include-ignored
+      - name: Regenerate the PTX with this runner's nvcc
+        run: cargo xtask regenerate-ptx
+      - name: Show how the regenerated PTX differs (informational)
+        run: git diff --stat -- crates/grafeo-cuda-algos/kernels/ptx
+      - name: GPU tests against the regenerated PTX
+        run: cargo test --workspace -- --include-ignored

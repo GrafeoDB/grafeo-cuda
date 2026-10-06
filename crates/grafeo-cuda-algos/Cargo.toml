@@ -29,15 +29,19 @@ path = "src/bin/gpu_ktruss.rs"
 [dependencies]
 grafeo-cuda-core.workspace = true
 grafeo-engine.workspace = true
-grafeo-core.workspace = true
 cudarc.workspace = true
 thiserror.workspace = true
 clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[build-dependencies]
+sha2.workspace = true
+
 [dev-dependencies]
 grafeo-adapters.workspace = true
+grafeo-core.workspace = true
+proptest.workspace = true
 
 [lints]
 workspace = true

@@ -1,10 +1,16 @@
 use grafeo_core::graph::Direction;
 use grafeo_core::graph::GraphStore;
 
+use crate::error::CudaError;
+
 /// CSR (Compressed Sparse Row) arrays ready for GPU transfer.
 ///
 /// Exported from a Grafeo `GraphStore`. Node IDs are remapped to contiguous
 /// 0-based u32 indices.
+///
+/// Every builder in this module produces a CSR that passes [`validate_csr`]:
+/// offsets start at 0 and never decrease, every target is a valid node index,
+/// and each neighbor list is strictly increasing (sorted, no duplicates).
 #[derive(Debug, Clone)]
 pub struct CsrArrays {
     /// Row pointer array: `offsets[i]` is the start index in `targets` for node `i`.
@@ -22,10 +28,109 @@ pub struct CsrArrays {
     pub num_edges: u32,
 }
 
+impl CsrArrays {
+    /// Checks the structural invariants the GPU kernels rely on.
+    ///
+    /// Equivalent to [`validate_csr`] on `offsets` and `targets`, plus a check
+    /// that `num_nodes` and `num_edges` agree with the array lengths.
+    pub fn validate(&self) -> Result<(), CudaError> {
+        validate_csr(&self.offsets, &self.targets)?;
+        let nodes = self.offsets.len() - 1;
+        if self.num_nodes as usize != nodes {
+            return Err(CudaError::InvalidCsr(format!(
+                "num_nodes is {} but offsets describe {nodes} nodes",
+                self.num_nodes
+            )));
+        }
+        if self.num_edges as usize != self.targets.len() {
+            return Err(CudaError::InvalidCsr(format!(
+                "num_edges is {} but targets has {} entries",
+                self.num_edges,
+                self.targets.len()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Checks that `offsets` and `targets` form a well-formed CSR graph.
+///
+/// The GPU kernels index both arrays without bounds checks, so a malformed CSR
+/// would make them read (and for some kernels write) outside their buffers.
+/// [`GpuGraph`](crate::GpuGraph) calls this before every transfer.
+///
+/// Requirements:
+/// - `offsets` is non-empty and `offsets[0] == 0`
+/// - `offsets` never decreases and `offsets[n] == targets.len()`
+/// - both lengths fit in `u32`
+/// - every target is a node index below `offsets.len() - 1`
+/// - every neighbor list is strictly increasing (sorted, without duplicates),
+///   which the merge and binary-search intersections in triangle counting and
+///   k-truss depend on
+pub fn validate_csr(offsets: &[u32], targets: &[u32]) -> Result<(), CudaError> {
+    let Some((&first, _)) = offsets.split_first() else {
+        return Err(CudaError::InvalidCsr(
+            "offsets must have num_nodes + 1 entries, got an empty array".to_string(),
+        ));
+    };
+    if u32::try_from(offsets.len()).is_err() || u32::try_from(targets.len()).is_err() {
+        return Err(CudaError::InvalidCsr(format!(
+            "graph too large for u32 indices: {} offsets, {} targets",
+            offsets.len(),
+            targets.len()
+        )));
+    }
+    if first != 0 {
+        return Err(CudaError::InvalidCsr(format!(
+            "offsets[0] must be 0, got {first}"
+        )));
+    }
+    let num_nodes = offsets.len() - 1;
+    let last = offsets[num_nodes] as usize;
+    if last != targets.len() {
+        return Err(CudaError::InvalidCsr(format!(
+            "offsets[{num_nodes}] is {last} but targets has {} entries",
+            targets.len()
+        )));
+    }
+    for node in 0..num_nodes {
+        let (start, end) = (offsets[node], offsets[node + 1]);
+        if end < start {
+            return Err(CudaError::InvalidCsr(format!(
+                "offsets decrease at node {node}: {start} then {end}"
+            )));
+        }
+        let list = &targets[start as usize..end as usize];
+        for (position, &target) in list.iter().enumerate() {
+            if target as usize >= num_nodes {
+                return Err(CudaError::InvalidCsr(format!(
+                    "node {node} has neighbor {target}, but there are only {num_nodes} nodes"
+                )));
+            }
+            if position > 0 && list[position - 1] >= target {
+                return Err(CudaError::InvalidCsr(format!(
+                    "neighbor list of node {node} is not strictly increasing                      ({} then {target})",
+                    list[position - 1]
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Export a Grafeo `GraphStore` to CSR arrays for GPU transfer.
 ///
-/// Remaps internal `NodeId` values to contiguous 0-based u32 indices.
-/// If `symmetric` is true, each edge (u,v) is stored in both directions.
+/// Only live nodes take part: CSR index `i` is the node `store.node_ids()[i]`,
+/// so results indexed by CSR position map back to Grafeo nodes through that
+/// list. Edges that point at a deleted node are dropped.
+///
+/// Edges are read in the outgoing direction. If `symmetric` is false the CSR
+/// holds each edge `u -> v` once, in the list of `u`. If `symmetric` is true
+/// the graph is treated as undirected and each edge appears in the lists of
+/// both endpoints. Either way, parallel edges collapse into one entry and a
+/// self-loop appears once in its node's list.
+///
+/// Node and CSR entry counts must fit in `u32`.
 pub fn export_to_csr(store: &dyn GraphStore, symmetric: bool) -> CsrArrays {
     let node_ids = store.node_ids();
     let num_nodes = node_ids.len();
@@ -84,7 +189,11 @@ pub fn export_to_csr(store: &dyn GraphStore, symmetric: bool) -> CsrArrays {
 /// Adjacency lists are sorted for merge-based intersection.
 pub fn from_edge_pairs(edges: &[(u32, u32)], num_nodes: u32, symmetric: bool) -> CsrArrays {
     // Collect all edges (optionally symmetric)
-    let capacity = if symmetric { edges.len() * 2 } else { edges.len() };
+    let capacity = if symmetric {
+        edges.len() * 2
+    } else {
+        edges.len()
+    };
     let mut all_edges: Vec<(u32, u32)> = Vec::with_capacity(capacity);
     for &(src, dst) in edges {
         all_edges.push((src, dst));
@@ -119,8 +228,9 @@ pub fn from_edge_pairs(edges: &[(u32, u32)], num_nodes: u32, symmetric: bool) ->
 
 /// Parse a TSV edge list file into raw edge pairs with contiguous 0-based IDs.
 ///
-/// Returns (edge_pairs, num_nodes, id_mapping).
-/// Skips comment lines starting with '#' or '%'.
+/// Returns `(edge_pairs, num_nodes)`. IDs are assigned in order of first
+/// appearance. Skips blank lines, comment lines starting with '#' or '%', and
+/// lines whose first two fields are not unsigned integers.
 pub fn parse_tsv_to_edges(path: &std::path::Path) -> std::io::Result<(Vec<(u32, u32)>, u32)> {
     use std::collections::HashMap;
     use std::io::BufRead;
@@ -225,10 +335,4 @@ pub fn from_edge_pairs_oriented(edges: &[(u32, u32)], num_nodes: u32) -> CsrArra
         num_nodes,
         num_edges: oriented.len() as u32,
     }
-}
-
-#[cfg(test)]
-mod tests {
-    // CSR export correctness is verified via the roundtrip and correctness
-    // integration tests in grafeo-cuda-algos.
 }

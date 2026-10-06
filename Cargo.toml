@@ -4,6 +4,7 @@ members = [
     "crates/grafeo-cuda-core",
     "crates/grafeo-cuda-algos",
     "crates/bindings/python",
+    "xtask",
 ]
 default-members = [
     "crates/grafeo-cuda-core",
@@ -24,20 +25,33 @@ description = "GPU-accelerated graph algorithms for the Grafeo graph database."
 grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.1.1" }
 grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.1.1" }
 
-# Grafeo (path for local dev, version for crates.io publish)
-grafeo-engine = { path = "../grafeo/crates/grafeo-engine", version = "0.5.33", features = ["algos", "gql"] }
-grafeo-adapters = { path = "../grafeo/crates/grafeo-adapters", version = "0.5.33", features = ["gql", "algos"] }
-grafeo-core = { path = "../grafeo/crates/grafeo-core", version = "0.5.33" }
-grafeo-common = { path = "../grafeo/crates/grafeo-common", version = "0.5.33" }
+# Grafeo implementation crates, pinned exactly.
+#
+# The stable `grafeo` facade does not (yet) re-export what this workspace
+# needs: `grafeo_core::graph::Direction` (required to enumerate edges through
+# `GraphStore::edges_from`) and the CPU reference algorithms in
+# `grafeo_adapters::plugins::algorithms` (used by the correctness tests).
+# Implementation crates may change their API in any release, so they are pinned
+# with `=` and bumped deliberately together. To build against a local Grafeo
+# checkout, uncomment the `[patch.crates-io]` section at the bottom of this file.
+grafeo-engine = { version = "=0.5.44", features = ["algos", "gql"] }
+grafeo-adapters = { version = "=0.5.44", features = ["gql", "algos"] }
+grafeo-core = "=0.5.44"
 
-# GPU
-cudarc = { version = "0.19", features = ["driver", "nvrtc", "cuda-version-from-build-system"] }
+# GPU. The CUDA version is fixed rather than read from nvcc at build time, so
+# builds need no CUDA toolkit and do not depend on the machine they run on.
+# cudarc loads the driver at runtime; 12.6 bindings match the committed PTX
+# (ISA 8.5), which already needs a CUDA 12.5 or newer driver.
+cudarc = { version = "0.19", features = ["driver", "nvrtc", "cuda-12060"] }
+
+# PTX manifest hashing (build script and xtask)
+sha2 = "0.10"
 
 # Error handling
 thiserror = "2.0"
 
 # Python bindings
-pyo3 = "0.27"
+pyo3 = "0.29"
 
 # CLI & serialization
 clap = { version = "4", features = ["derive"] }
@@ -46,6 +60,7 @@ serde_json = "1"
 
 # Testing & benchmarks
 criterion = "0.8"
+proptest = "1"
 
 [workspace.lints.rust]
 unsafe_code = "warn"
@@ -83,3 +98,9 @@ opt-level = 1
 [profile.bench]
 lto = "thin"
 codegen-units = 1
+
+# Local development against a sibling Grafeo checkout (never commit uncommented):
+# [patch.crates-io]
+# grafeo-engine = { path = "../grafeo/crates/grafeo-engine" }
+# grafeo-adapters = { path = "../grafeo/crates/grafeo-adapters" }
+# grafeo-core = { path = "../grafeo/crates/grafeo-core" }

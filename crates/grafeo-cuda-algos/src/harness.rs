@@ -64,8 +64,8 @@ pub fn load_and_transfer(dataset: &str, device: &GpuDevice) -> (GrafeoDB, GpuGra
     eprintln!("  Loaded {nodes} nodes, {edges} edges in {load_time:.2}s from {dataset}");
 
     let transfer_start = Instant::now();
-    let store = db.store();
-    let csr = export_to_csr(&**store, true);
+    let store = db.graph_store();
+    let csr = export_to_csr(&*store, true);
     let gpu_graph =
         GpuGraph::from_csr_arrays(csr, device).expect("Failed to transfer graph to GPU");
     let transfer_time = transfer_start.elapsed().as_secs_f64();
@@ -87,7 +87,10 @@ pub fn load_and_transfer_direct(dataset: &str, device: &GpuDevice) -> (GpuGraph,
     let (edges, num_nodes) =
         grafeo_cuda_core::parse_tsv_to_edges(Path::new(dataset)).expect("failed to parse TSV");
     let parse_time = start.elapsed().as_secs_f64();
-    eprintln!("  Parsed {num_nodes} nodes, {} edges in {parse_time:.2}s from {dataset}", edges.len());
+    eprintln!(
+        "  Parsed {num_nodes} nodes, {} edges in {parse_time:.2}s from {dataset}",
+        edges.len()
+    );
 
     let csr_start = Instant::now();
     let csr = grafeo_cuda_core::from_edge_pairs(&edges, num_nodes, true);
@@ -117,7 +120,10 @@ pub fn load_and_transfer_direct(dataset: &str, device: &GpuDevice) -> (GpuGraph,
 /// Returns (oriented GpuGraph, symmetric_edge_count, total_time).
 /// The symmetric edge count is needed for TEPS calculation since the oriented
 /// graph has roughly half the entries.
-pub fn load_and_transfer_direct_oriented(dataset: &str, device: &GpuDevice) -> (GpuGraph, u32, f64) {
+pub fn load_and_transfer_direct_oriented(
+    dataset: &str,
+    device: &GpuDevice,
+) -> (GpuGraph, u32, f64) {
     let start = Instant::now();
 
     let (edges, num_nodes) =

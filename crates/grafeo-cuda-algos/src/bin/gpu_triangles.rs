@@ -108,8 +108,7 @@ fn run_oriented(args: &Args, device: &GpuDevice) {
 }
 
 fn run_symmetric(args: &Args, device: &GpuDevice) {
-    let (_db, gpu_graph, transfer_time) =
-        harness::load_and_transfer(&args.dataset, device);
+    let (_db, gpu_graph, transfer_time) = harness::load_and_transfer(&args.dataset, device);
 
     // Warmup
     for _ in 0..args.warmup {
@@ -120,8 +119,7 @@ fn run_symmetric(args: &Args, device: &GpuDevice) {
     let mut last_count = 0u64;
 
     for _ in 0..args.runs {
-        let result =
-            triangle_counting::triangle_count(&gpu_graph).expect("triangle_count failed");
+        let result = triangle_counting::triangle_count(&gpu_graph).expect("triangle_count failed");
         times.push(result.time_seconds);
         last_count = result.total_triangles;
     }

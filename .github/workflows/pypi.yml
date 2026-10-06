@@ -9,16 +9,20 @@ permissions:
   id-token: write
   contents: read
 
+# Wheels embed the PTX committed in crates/grafeo-cuda-algos/kernels/ptx/, so
+# the hosted runners need no CUDA toolkit and every wheel carries the same
+# kernels. The build fails if that PTX does not match the kernel sources; the
+# explicit check below reports it before any build starts.
+
 jobs:
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check committed PTX matches the kernel sources
+        run: cargo xtask check-ptx
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -37,10 +41,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check committed PTX matches the kernel sources
+        run: cargo xtask check-ptx
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -61,10 +64,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check committed PTX matches the kernel sources
+        run: cargo xtask check-ptx
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"

@@ -7,6 +7,8 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 description = "Python bindings for GPU-accelerated Grafeo graph algorithms."
+# Distributed on PyPI (see pypi.yml), not crates.io.
+publish = false
 
 [lib]
 name = "grafeo_cuda"
@@ -15,8 +17,9 @@ crate-type = ["cdylib"]
 [dependencies]
 grafeo-cuda-core.workspace = true
 grafeo-cuda-algos.workspace = true
-grafeo-engine.workspace = true
-pyo3 = { workspace = true, features = ["extension-module"] }
+# No `extension-module` feature (deprecated in pyo3 0.29): maturin >= 1.9.4
+# sets PYO3_BUILD_EXTENSION_MODULE when building the wheel.
+pyo3.workspace = true
 
 [lints]
 workspace = true

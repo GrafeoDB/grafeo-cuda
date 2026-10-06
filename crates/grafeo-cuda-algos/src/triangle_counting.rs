@@ -7,14 +7,13 @@
 //!
 //! The edge-parallel kernel requires prefix-sum auxiliary buffers.
 
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use cudarc::driver::{LaunchConfig, PushKernelArg};
 use grafeo_cuda_core::error::CudaError;
 use grafeo_cuda_core::gpu_graph::GpuGraph;
 
-use crate::module_cache;
+use crate::{launch, module_cache};
 
 /// Result of GPU triangle counting.
 #[derive(Debug, Clone)]
@@ -25,9 +24,9 @@ pub struct TriangleCountResult {
     pub time_seconds: f64,
 }
 
-const PTX: &str = include_str!("../../../kernels/compiled/triangle_counting.ptx");
-static MODULE: OnceLock<module_cache::CachedModule> = OnceLock::new();
-static MODULE_ORIENTED: OnceLock<module_cache::CachedModule> = OnceLock::new();
+pub(crate) const PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/ptx/triangle_counting.ptx"));
+static MODULE: module_cache::ModuleCache = module_cache::ModuleCache::new();
+static MODULE_ORIENTED: module_cache::ModuleCache = module_cache::ModuleCache::new();
 
 /// Count all triangles in the graph on GPU using the edge-parallel kernel.
 ///
@@ -36,9 +35,18 @@ static MODULE_ORIENTED: OnceLock<module_cache::CachedModule> = OnceLock::new();
 /// 2. Prefix sum to get global edge-to-warp mapping
 /// 3. One warp per forward edge, cooperative intersection
 ///
-/// Falls back to warp-per-node kernel if prefix sum fails.
+/// The graph must be a symmetric CSR with sorted neighbor lists, as built by
+/// `export_to_csr(store, true)` or `from_edge_pairs(edges, n, true)`.
 pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError> {
     let start = Instant::now();
+
+    // Nothing to launch, and the driver rejects empty grids.
+    if graph.num_edges == 0 {
+        return Ok(TriangleCountResult {
+            total_triangles: 0,
+            time_seconds: start.elapsed().as_secs_f64(),
+        });
+    }
 
     let ctx = graph.stream.context();
     let funcs = module_cache::get_or_load(
@@ -54,12 +62,12 @@ pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError
         ],
     )?;
 
-    let threads_per_block = 256u32;
-    let num_blocks_nodes = graph.num_nodes.div_ceil(threads_per_block);
+    let node_config = launch::thread_per_item(graph.num_nodes);
 
     // Step 1: Compute forward edge counts per node
-    let mut fwd_counts = graph.stream.clone_htod(&vec![0u32; graph.num_nodes as usize])?;
+    let mut fwd_counts = graph.stream.alloc_zeros::<u32>(graph.num_nodes as usize)?;
 
+    // SAFETY: the CSR was validated on transfer; fwd_counts holds num_nodes entries.
     unsafe {
         graph
             .stream
@@ -68,17 +76,16 @@ pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError
             .arg(&graph.targets)
             .arg(&graph.num_nodes)
             .arg(&mut fwd_counts)
-            .launch(LaunchConfig {
-                grid_dim: (num_blocks_nodes, 1, 1),
-                block_dim: (threads_per_block, 1, 1),
-                shared_mem_bytes: 0,
-            })
+            .launch(node_config)
     }
     .map_err(|e| CudaError::Kernel(format!("fwd_counts launch failed: {e}")))?;
 
     // Step 2: Prefix sum (single-thread kernel, fast enough for <10M nodes)
-    let mut fwd_offsets = graph.stream.clone_htod(&vec![0u32; graph.num_nodes as usize + 1])?;
+    let mut fwd_offsets = graph
+        .stream
+        .alloc_zeros::<u32>(graph.num_nodes as usize + 1)?;
 
+    // SAFETY: fwd_counts holds num_nodes entries and fwd_offsets num_nodes + 1.
     unsafe {
         graph
             .stream
@@ -95,7 +102,9 @@ pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError
     .map_err(|e| CudaError::Kernel(format!("prefix_sum launch failed: {e}")))?;
 
     // Read total forward edges from last element
-    graph.stream.synchronize()
+    graph
+        .stream
+        .synchronize()
         .map_err(|e| CudaError::Kernel(format!("sync failed: {e}")))?;
 
     let fwd_offsets_host = graph.stream.clone_dtoh(&fwd_offsets)?;
@@ -110,10 +119,10 @@ pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError
 
     // Step 3: Edge-parallel triangle counting
     let mut result_buf = graph.stream.clone_htod(&[0u64])?;
+    let edge_config = launch::warp_per_item(total_fwd_edges)?; // one warp per forward edge
 
-    let total_threads = total_fwd_edges * 32; // one warp per forward edge
-    let num_blocks = total_threads.div_ceil(threads_per_block);
-
+    // SAFETY: the CSR was validated on transfer (sorted lists, targets in
+    // range); fwd_offsets was filled by the prefix sum for this graph.
     unsafe {
         graph
             .stream
@@ -124,15 +133,13 @@ pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError
             .arg(&graph.num_nodes)
             .arg(&total_fwd_edges)
             .arg(&mut result_buf)
-            .launch(LaunchConfig {
-                grid_dim: (num_blocks, 1, 1),
-                block_dim: (threads_per_block, 1, 1),
-                shared_mem_bytes: 0,
-            })
+            .launch(edge_config)
     }
     .map_err(|e| CudaError::Kernel(format!("edge_parallel launch failed: {e}")))?;
 
-    graph.stream.synchronize()
+    graph
+        .stream
+        .synchronize()
         .map_err(|e| CudaError::Kernel(format!("sync failed: {e}")))?;
 
     let result_host = graph.stream.clone_dtoh(&result_buf)?;
@@ -155,6 +162,14 @@ pub fn triangle_count(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError
 pub fn triangle_count_oriented(graph: &GpuGraph) -> Result<TriangleCountResult, CudaError> {
     let start = Instant::now();
 
+    // Nothing to launch, and the driver rejects empty grids.
+    if graph.num_edges == 0 {
+        return Ok(TriangleCountResult {
+            total_triangles: 0,
+            time_seconds: start.elapsed().as_secs_f64(),
+        });
+    }
+
     let ctx = graph.stream.context();
     let funcs = module_cache::get_or_load(
         &MODULE_ORIENTED,
@@ -163,19 +178,10 @@ pub fn triangle_count_oriented(graph: &GpuGraph) -> Result<TriangleCountResult, 
         &["triangle_count_oriented_kernel"],
     )?;
 
-    if graph.num_edges == 0 {
-        return Ok(TriangleCountResult {
-            total_triangles: 0,
-            time_seconds: start.elapsed().as_secs_f64(),
-        });
-    }
-
     let mut result_buf = graph.stream.clone_htod(&[0u64])?;
+    let edge_config = launch::warp_per_item(graph.num_edges)?; // one warp per oriented edge
 
-    let threads_per_block = 256u32;
-    let total_threads = graph.num_edges * 32; // one warp per oriented edge
-    let num_blocks = total_threads.div_ceil(threads_per_block);
-
+    // SAFETY: the CSR was validated on transfer (sorted lists, targets in range).
     unsafe {
         graph
             .stream
@@ -185,11 +191,7 @@ pub fn triangle_count_oriented(graph: &GpuGraph) -> Result<TriangleCountResult, 
             .arg(&graph.num_nodes)
             .arg(&graph.num_edges)
             .arg(&mut result_buf)
-            .launch(LaunchConfig {
-                grid_dim: (num_blocks, 1, 1),
-                block_dim: (threads_per_block, 1, 1),
-                shared_mem_bytes: 0,
-            })
+            .launch(edge_config)
     }
     .map_err(|e| CudaError::Kernel(format!("oriented TC launch failed: {e}")))?;
 

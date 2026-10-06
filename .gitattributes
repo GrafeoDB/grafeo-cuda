@@ -1,0 +1,5 @@
+# The PTX manifest hashes these files with LF line endings (CRLF is normalized
+# before hashing as well); keep them LF in every checkout.
+*.cu text eol=lf
+*.ptx text eol=lf
+crates/grafeo-cuda-algos/kernels/ptx/manifest.toml text eol=lf

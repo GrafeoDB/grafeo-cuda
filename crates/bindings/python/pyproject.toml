@@ -27,5 +27,4 @@ Repository = "https://github.com/GrafeoDB/grafeo-cuda"
 Documentation = "https://github.com/GrafeoDB/grafeo-cuda#readme"
 
 [tool.maturin]
-features = ["pyo3/extension-module"]
 module-name = "grafeo_cuda"
