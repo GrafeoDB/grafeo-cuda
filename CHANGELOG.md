@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented in this file.
 
+## [0.3.0] - Unreleased
+
+Toolchain release: grafeo-cuda needs Rust 1.100 or newer to build; stay on 0.2.0 for an older Rust.
+
+### Changed
+
+- **Rust 1.100 is the minimum** (was 1.99): `rust-version = "1.100.0"` and the MSRV job in CI, the same as grafeo 0.6.3.
+
 ## [0.2.0] - 2026-11-14
 
 ### Added
