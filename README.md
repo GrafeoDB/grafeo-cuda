@@ -26,7 +26,7 @@ transferred back to host memory.
 
 ### Prerequisites
 
-To build: Rust 1.99.0+. No CUDA toolkit is needed.
+To build: Rust 1.100.0+. No CUDA toolkit is needed.
 
 To run:
 
