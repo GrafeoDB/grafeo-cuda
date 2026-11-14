@@ -20,7 +20,7 @@ jobs:
     name: Format, Clippy & PTX
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -40,18 +40,41 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Run tests (GPU tests are ignored)
         run: cargo test --workspace
 
+  python:
+    name: Python binding (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: astral-sh/setup-uv@v10.3.0
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv venv --python ${{ matrix.python-version }}
+      # The binding is abi3 (CPython 3.12 and later): the same wheel installs on every version.
+      - name: Build the wheel
+        run: uvx maturin build --out dist -m crates/bindings/python/Cargo.toml -i .venv/bin/python
+      - name: Install the wheel
+        run: uv pip install --python .venv/bin/python dist/*.whl
+      # Hosted runners have no GPU, so this checks the module loads and exposes its classes.
+      - name: Import the module
+        run: .venv/bin/python -c "import sys, grafeo_cuda; assert grafeo_cuda.GpuDevice and grafeo_cuda.GpuGraph; print(sys.version, grafeo_cuda.__file__)"
+
   msrv:
-    name: MSRV (1.91.1)
+    name: MSRV (1.99.0)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.91.1
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.99.0
       - uses: Swatinem/rust-cache@v2
       - name: Check
         run: cargo check --workspace --all-targets
@@ -60,7 +83,7 @@ jobs:
     name: Package (no CUDA toolkit)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # Builds each crate from its packaged files only, as crates.io users do.
@@ -72,7 +95,7 @@ jobs:
     runs-on: [self-hosted, gpu]
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Verify CUDA
