@@ -2,10 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
-and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-
-## [Unreleased]
+## [0.2.0] - 2026-11-14
 
 ### Added
 
@@ -34,19 +31,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Grafeo comes from crates.io instead of a sibling `../grafeo` checkout.
-  `grafeo-engine`, `grafeo-core` and `grafeo-adapters` are pinned to `=0.5.44`:
-  they are implementation crates whose API may change in any Grafeo release, and
-  the stable `grafeo` crate does not yet re-export the items this workspace uses
-  (`Direction` and the CPU algorithms). `Cargo.toml` has a commented
-  `[patch.crates-io]` section for building against a local Grafeo checkout.
-- Removed unused dependencies: `grafeo-common` everywhere and `grafeo-engine` in
-  the Python binding. `grafeo-core` is now a dev-dependency of
-  `grafeo-cuda-algos`.
-- `GpuGraph::from_grafeo` reads through `GrafeoDB::graph_store()`.
-- The Python binding uses pyo3 0.29 (was 0.27), matching Grafeo. It no longer
+- **grafeo 0.6.2**: the engine crates are pinned to `=0.6.2`. grafeo 0.6 removed
+  the standalone `LpgStore` and made store reads take a `ReadView`, so `export_to_csr` now takes
+  `(store, view, symmetric)` and returns `Result` (take both from `GrafeoDB::snapshot()`), and
+  `GpuGraph::from_grafeo` reads through `snapshot()` instead of the removed `graph_store()`. Tests
+  build graphs on an in-memory `GrafeoDB` (direct `create_node`/`batch_create_edges`, GQL for deletes).
+  Other dependencies updated to their latest semver-compatible versions.
+- Requires Grafeo 0.6. Grafeo comes from crates.io instead of a
+  sibling `../grafeo` checkout. `grafeo-engine`, `grafeo-core` and
+  `grafeo-adapters` are pinned to `=0.6.2`: they are implementation
+  crates whose API may change in any Grafeo release, and the stable `grafeo`
+  crate does not yet re-export the items this workspace uses (`Direction` and
+  the CPU algorithms). `Cargo.toml` has a commented `[patch.crates-io]` section
+  for building against a local Grafeo checkout.
+- The minimum supported Rust version is 1.99.0 (was 1.91.1), as for Grafeo 0.6.
+- Removed unused dependencies: `grafeo-engine` in the Python binding.
+  `grafeo-core` is now a dev-dependency of `grafeo-cuda-algos`.
+- The Python binding uses pyo3 0.30 (was 0.27), matching Grafeo. It no longer
   enables pyo3's deprecated `extension-module` feature: maturin 1.9.4 and newer
-  (`pyproject.toml` requires 1.11.5) sets `PYO3_BUILD_EXTENSION_MODULE` itself.
+  (`pyproject.toml` requires 1.15.0) sets `PYO3_BUILD_EXTENSION_MODULE` itself.
+- The Python binding is abi3 (pyo3 `abi3-py312`), as in Grafeo: each platform
+  gets one wheel, tagged `cp312-abi3`, for CPython 3.12 and later (the Windows
+  wheel used to cover Python 3.12 only). Tested on Python 3.15; CI builds the
+  wheel and imports it on Python 3.12 to 3.15, and the classifiers list 3.12
+  to 3.15.
+- Dependency updates: cudarc 0.19.10, sha2 0.11 (PTX manifest hashing, same
+  hashes), proptest 1.12, and the GitHub Actions used by the workflows
+  (`actions/checkout` v7, `actions/setup-python` v7, `actions/upload-artifact`
+  v7, `actions/download-artifact` v8, `softprops/action-gh-release` v3).
+- The GPU correctness tests compare with Grafeo's CPU algorithms on graphs with
+  self-loops and with nodes deleted without their edges, without the
+  workarounds 0.5.x needed: Grafeo 0.6 leaves self-loops out of k-truss and its
+  traversals skip deleted nodes.
 - `export_to_csr` documents its index contract: CSR index `i` is
   `store.node_ids()[i]`.
 - The CUDA kernels moved from `kernels/` at the repository root into
@@ -62,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI runs on hosted runners without a GPU: formatting, the committed PTX check,
   Clippy for all targets, the CPU tests on Linux and Windows, packaging of the
   crates.io crates, and a check with the minimum supported Rust version
-  (1.91.1). The self-hosted GPU runner runs the GPU tests against the committed
+  (1.99.0). The self-hosted GPU runner runs the GPU tests against the committed
   PTX, then regenerates it with its own nvcc and runs them again.
 - The release workflow publishes with `cargo publish --workspace`, which
   verifies each crate from its packaged files, instead of
@@ -106,4 +122,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The build script wrote compiled PTX into the source tree, so builds with and
   without nvcc overwrote each other's kernels.
 
-[Unreleased]: https://github.com/GrafeoDB/grafeo-cuda/compare/v0.1.0...HEAD
+[0.2.0]: https://github.com/GrafeoDB/grafeo-cuda/compare/v0.1.0...v0.2.0
+
+---
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
