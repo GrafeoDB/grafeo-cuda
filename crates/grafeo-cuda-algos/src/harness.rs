@@ -64,8 +64,8 @@ pub fn load_and_transfer(dataset: &str, device: &GpuDevice) -> (GrafeoDB, GpuGra
     eprintln!("  Loaded {nodes} nodes, {edges} edges in {load_time:.2}s from {dataset}");
 
     let transfer_start = Instant::now();
-    let store = db.graph_store();
-    let csr = export_to_csr(&*store, true);
+    let snapshot = db.snapshot().expect("snapshot");
+    let csr = export_to_csr(snapshot.store(), snapshot.view(), true).expect("CSR export");
     let gpu_graph =
         GpuGraph::from_csr_arrays(csr, device).expect("Failed to transfer graph to GPU");
     let transfer_time = transfer_start.elapsed().as_secs_f64();

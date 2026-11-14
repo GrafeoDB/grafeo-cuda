@@ -12,9 +12,9 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
-rust-version = "1.91.1"
+rust-version = "1.99.0"
 license = "Apache-2.0"
 repository = "https://github.com/GrafeoDB/grafeo-cuda"
 authors = ["S.T. Grond"]
@@ -22,8 +22,8 @@ description = "GPU-accelerated graph algorithms for the Grafeo graph database."
 
 [workspace.dependencies]
 # Internal crates
-grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.1.1" }
-grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.1.1" }
+grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.2.0" }
+grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.2.0" }
 
 # Grafeo implementation crates, pinned exactly.
 #
@@ -34,9 +34,10 @@ grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.1.1" }
 # Implementation crates may change their API in any release, so they are pinned
 # with `=` and bumped deliberately together. To build against a local Grafeo
 # checkout, uncomment the `[patch.crates-io]` section at the bottom of this file.
-grafeo-engine = { version = "=0.5.44", features = ["algos", "gql"] }
-grafeo-adapters = { version = "=0.5.44", features = ["gql", "algos"] }
-grafeo-core = "=0.5.44"
+grafeo-engine = { version = "=0.6.2", features = ["algos", "gql"] }
+grafeo-adapters = { version = "=0.6.2", features = ["gql", "algos"] }
+grafeo-core = "=0.6.2"
+grafeo-common = "=0.6.2"
 
 # GPU. The CUDA version is fixed rather than read from nvcc at build time, so
 # builds need no CUDA toolkit and do not depend on the machine they run on.
@@ -45,13 +46,13 @@ grafeo-core = "=0.5.44"
 cudarc = { version = "0.19", features = ["driver", "nvrtc", "cuda-12060"] }
 
 # PTX manifest hashing (build script and xtask)
-sha2 = "0.10"
+sha2 = "0.11"
 
 # Error handling
 thiserror = "2.0"
 
 # Python bindings
-pyo3 = "0.29"
+pyo3 = "0.30"
 
 # CLI & serialization
 clap = { version = "4", features = ["derive"] }

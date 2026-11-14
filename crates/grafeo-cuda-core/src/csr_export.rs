@@ -1,3 +1,4 @@
+use grafeo_common::types::ReadView;
 use grafeo_core::graph::Direction;
 use grafeo_core::graph::GraphStore;
 
@@ -120,9 +121,11 @@ pub fn validate_csr(offsets: &[u32], targets: &[u32]) -> Result<(), CudaError> {
 
 /// Export a Grafeo `GraphStore` to CSR arrays for GPU transfer.
 ///
-/// Only live nodes take part: CSR index `i` is the node `store.node_ids()[i]`,
-/// so results indexed by CSR position map back to Grafeo nodes through that
-/// list. Edges that point at a deleted node are dropped.
+/// Reads `store` at `view` (take both from a [`grafeo_engine::Snapshot`]):
+/// `snapshot.store()` and `snapshot.view()`. Only live nodes take part: CSR
+/// index `i` is the node `store.node_ids(view)[i]`, so results indexed by CSR
+/// position map back to Grafeo nodes through that list. Edges that point at a
+/// deleted node are dropped.
 ///
 /// Edges are read in the outgoing direction. If `symmetric` is false the CSR
 /// holds each edge `u -> v` once, in the list of `u`. If `symmetric` is true
@@ -131,8 +134,14 @@ pub fn validate_csr(offsets: &[u32], targets: &[u32]) -> Result<(), CudaError> {
 /// self-loop appears once in its node's list.
 ///
 /// Node and CSR entry counts must fit in `u32`.
-pub fn export_to_csr(store: &dyn GraphStore, symmetric: bool) -> CsrArrays {
-    let node_ids = store.node_ids();
+pub fn export_to_csr(
+    store: &dyn GraphStore,
+    view: ReadView,
+    symmetric: bool,
+) -> Result<CsrArrays, CudaError> {
+    let node_ids = store
+        .node_ids(view)
+        .map_err(|e| CudaError::Export(e.to_string()))?;
     let num_nodes = node_ids.len();
 
     // Build mapping from NodeId -> contiguous u32 index
@@ -145,7 +154,10 @@ pub fn export_to_csr(store: &dyn GraphStore, symmetric: bool) -> CsrArrays {
     let mut adj: Vec<Vec<u32>> = vec![Vec::new(); num_nodes];
 
     for (i, &node_id) in node_ids.iter().enumerate() {
-        for (neighbor, _edge_id) in store.edges_from(node_id, Direction::Outgoing) {
+        let edges = store
+            .edges(node_id, Direction::Outgoing, &[], view)
+            .map_err(|e| CudaError::Export(e.to_string()))?;
+        for (neighbor, _edge_id) in edges {
             if let Some(&j) = id_map.get(&neighbor) {
                 adj[i].push(j);
                 if symmetric {
@@ -174,12 +186,12 @@ pub fn export_to_csr(store: &dyn GraphStore, symmetric: bool) -> CsrArrays {
     }
     offsets.push(offset);
 
-    CsrArrays {
+    Ok(CsrArrays {
         offsets,
         targets,
         num_nodes: num_nodes as u32,
         num_edges: total_edges as u32,
-    }
+    })
 }
 
 /// Build CSR arrays directly from edge pairs, bypassing GraphStore entirely.

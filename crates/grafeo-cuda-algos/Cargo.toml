@@ -40,6 +40,7 @@ sha2.workspace = true
 
 [dev-dependencies]
 grafeo-adapters.workspace = true
+grafeo-common.workspace = true
 grafeo-core.workspace = true
 proptest.workspace = true
 

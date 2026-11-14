@@ -136,9 +136,12 @@ fn test_empty_graph() {
         0
     );
     let ranks = pagerank::pagerank(&graph, 0.85, 20, 1e-6).unwrap();
-    assert!(ranks.ranks.is_empty());
+    assert_eq!(ranks.ranks, Vec::<f32>::new());
     assert!(ranks.converged);
-    assert!(k_truss::k_truss(&graph, 3).unwrap().edges.is_empty());
+    assert_eq!(
+        k_truss::k_truss(&graph, 3).unwrap().edges,
+        Vec::<(u32, u32)>::new()
+    );
     assert!(matches!(bfs::bfs(&graph, 0), Err(CudaError::Kernel(_))));
 }
 
@@ -159,7 +162,10 @@ fn test_edgeless_graph() {
             .total_triangles,
         0
     );
-    assert!(k_truss::k_truss(&graph, 3).unwrap().edges.is_empty());
+    assert_eq!(
+        k_truss::k_truss(&graph, 3).unwrap().edges,
+        Vec::<(u32, u32)>::new()
+    );
 
     let result = bfs::bfs(&graph, 1).unwrap();
     assert_eq!(result.distances, vec![-1, 0, -1]);

@@ -12,7 +12,76 @@
 use std::collections::{BTreeSet, HashMap};
 
 use grafeo_adapters::plugins::algorithms;
-use grafeo_core::LpgStore;
+use grafeo_common::types::{EdgeId, NodeId, Value};
+use grafeo_engine::GrafeoDB;
+use grafeo_engine::database::BatchEdge;
+
+struct Db(pub GrafeoDB);
+
+impl Db {
+    fn new() -> Self {
+        Self(GrafeoDB::new_in_memory())
+    }
+
+    fn create_node(&self, labels: &[&str]) -> NodeId {
+        self.0.create_node(labels).unwrap()
+    }
+
+    fn create_edge(&self, src: NodeId, dst: NodeId, edge_type: &str) -> EdgeId {
+        self.0
+            .batch_create_edges(vec![BatchEdge::new(src, dst, edge_type)])
+            .unwrap()[0]
+    }
+
+    fn delete_node_edges(&self, id: NodeId) {
+        self.0
+            .session()
+            .execute_with_params(
+                "MATCH (n)-[r]-() WHERE id(n) = $id DELETE r",
+                HashMap::from([("id".to_string(), Value::from(id.0 as i64))]),
+            )
+            .unwrap();
+    }
+
+    fn delete_node(&self, id: NodeId) -> bool {
+        let result = self
+            .0
+            .session()
+            .execute_with_params(
+                "MATCH (n) WHERE id(n) = $id RETURN count(n) AS c",
+                HashMap::from([("id".to_string(), Value::from(id.0 as i64))]),
+            )
+            .unwrap();
+        let existed = matches!(
+            result.into_rows().first().and_then(|row| row.first()),
+            Some(Value::Int64(1))
+        );
+        if existed {
+            self.0
+                .session()
+                .execute_with_params(
+                    "MATCH (n) WHERE id(n) = $id DETACH DELETE n",
+                    HashMap::from([("id".to_string(), Value::from(id.0 as i64))]),
+                )
+                .unwrap();
+        }
+        existed
+    }
+
+    fn node_ids(&self) -> Vec<NodeId> {
+        let snap = self.0.snapshot().unwrap();
+        snap.store().node_ids(snap.view()).unwrap()
+    }
+
+    fn snap(&self) -> grafeo_engine::Snapshot {
+        self.0.snapshot().unwrap()
+    }
+
+    fn export(&self, symmetric: bool) -> CsrArrays {
+        let snap = self.snap();
+        export_to_csr(snap.store(), snap.view(), symmetric).unwrap()
+    }
+}
 use proptest::prelude::*;
 
 use grafeo_cuda_algos::{bfs, k_truss, pagerank, triangle_counting};
@@ -21,8 +90,8 @@ use grafeo_cuda_core::{CsrArrays, GpuDevice, GpuGraph, export_to_csr, from_edge_
 // ---- graph builders ----
 
 /// Creates `n` nodes and stores every edge in both directions (a self-loop once).
-fn undirected(n: usize, edges: &[(usize, usize)]) -> LpgStore {
-    let store = LpgStore::new().unwrap();
+fn undirected(n: usize, edges: &[(usize, usize)]) -> Db {
+    let store = Db::new();
     let ids: Vec<_> = (0..n).map(|_| store.create_node(&["Node"])).collect();
     for &(a, b) in edges {
         store.create_edge(ids[a], ids[b], "EDGE");
@@ -39,17 +108,17 @@ fn complete_edges(n: usize) -> Vec<(usize, usize)> {
         .collect()
 }
 
-fn create_complete(n: usize) -> LpgStore {
+fn create_complete(n: usize) -> Db {
     undirected(n, &complete_edges(n))
 }
 
-fn create_path(n: usize) -> LpgStore {
+fn create_path(n: usize) -> Db {
     let edges: Vec<_> = (1..n).map(|i| (i - 1, i)).collect();
     undirected(n, &edges)
 }
 
 /// Named small graphs with known structure.
-fn catalog() -> Vec<(&'static str, LpgStore)> {
+fn catalog() -> Vec<(&'static str, Db)> {
     let petersen = [
         (0, 1),
         (1, 2),
@@ -105,7 +174,7 @@ fn catalog() -> Vec<(&'static str, LpgStore)> {
 /// A graph exercising the export edge cases: self-loops, parallel edges and a
 /// deleted node. Node 2 is deleted, so the live nodes are 0, 1, 3, 4, 5, 6
 /// (CSR indices 0..6). With `detach` false its edges stay behind in the store.
-fn messy(self_loops: bool, parallel_edges: bool, detach: bool) -> LpgStore {
+fn messy(self_loops: bool, parallel_edges: bool, detach: bool) -> Db {
     let store = undirected(
         7,
         &[
@@ -146,8 +215,8 @@ fn device() -> GpuDevice {
     GpuDevice::new(0).expect("no CUDA device found")
 }
 
-fn upload(store: &LpgStore, device: &GpuDevice) -> (CsrArrays, GpuGraph) {
-    let csr = export_to_csr(store, true);
+fn upload(store: &Db, device: &GpuDevice) -> (CsrArrays, GpuGraph) {
+    let csr = store.export(true);
     let gpu = GpuGraph::from_csr_arrays(csr.clone(), device).expect("GPU transfer failed");
     (csr, gpu)
 }
@@ -162,8 +231,9 @@ fn index_of<Id: std::hash::Hash + Eq>(ids: Vec<Id>) -> HashMap<Id, u32> {
 
 // ---- comparisons ----
 
-fn check_triangles(name: &str, cpu_store: &LpgStore, csr: &CsrArrays, gpu: &GpuGraph) {
-    let cpu = algorithms::total_triangles(cpu_store);
+fn check_triangles(name: &str, cpu_store: &Db, csr: &CsrArrays, gpu: &GpuGraph) {
+    let snap = cpu_store.snap();
+    let cpu = algorithms::total_triangles(snap.store(), snap.view()).unwrap();
     let edge_parallel = triangle_counting::triangle_count(gpu).unwrap();
     assert_eq!(edge_parallel.total_triangles, cpu, "{name}: triangle_count");
 
@@ -187,10 +257,11 @@ fn check_triangles(name: &str, cpu_store: &LpgStore, csr: &CsrArrays, gpu: &GpuG
     );
 }
 
-fn check_bfs(name: &str, cpu_store: &LpgStore, gpu: &GpuGraph, source: u32) {
+fn check_bfs(name: &str, cpu_store: &Db, gpu: &GpuGraph, source: u32) {
     let ids = cpu_store.node_ids();
     let index = index_of(ids.clone());
-    let layers = algorithms::bfs_layers(cpu_store, ids[source as usize]);
+    let snap = cpu_store.snap();
+    let layers = algorithms::bfs_layers(snap.store(), snap.view(), ids[source as usize]).unwrap();
     let mut expected = vec![-1i32; ids.len()];
     for (depth, layer) in layers.iter().enumerate() {
         for id in layer {
@@ -212,9 +283,10 @@ fn check_bfs(name: &str, cpu_store: &LpgStore, gpu: &GpuGraph, source: u32) {
     );
 }
 
-fn check_pagerank(name: &str, cpu_store: &LpgStore, gpu: &GpuGraph) {
+fn check_pagerank(name: &str, cpu_store: &Db, gpu: &GpuGraph) {
     let ids = cpu_store.node_ids();
-    let cpu = algorithms::pagerank(cpu_store, 0.85, 1000, 1e-12);
+    let snap = cpu_store.snap();
+    let cpu = algorithms::pagerank(snap.store(), snap.view(), 0.85, 1000, 1e-12, true).unwrap();
     let result = pagerank::pagerank(gpu, 0.85, 1000, 1e-7).unwrap();
     assert_eq!(result.ranks.len(), ids.len(), "{name}: rank count");
     for (i, id) in ids.iter().enumerate() {
@@ -230,14 +302,13 @@ fn check_pagerank(name: &str, cpu_store: &LpgStore, gpu: &GpuGraph) {
     }
 }
 
-fn check_k_truss(name: &str, cpu_store: &LpgStore, gpu: &GpuGraph) {
+fn check_k_truss(name: &str, cpu_store: &Db, gpu: &GpuGraph) {
     let index = index_of(cpu_store.node_ids());
     for k in 3..=8u32 {
-        // Grafeo's CPU k-truss reports self-loops as truss edges; a truss is
-        // defined on the simple graph, so loops are left out of the reference.
-        let cpu: BTreeSet<(u32, u32)> = algorithms::k_truss(cpu_store, k as usize)
+        let snap = cpu_store.snap();
+        let cpu: BTreeSet<(u32, u32)> = algorithms::k_truss(snap.store(), snap.view(), k as usize)
+            .unwrap()
             .into_iter()
-            .filter(|(a, b)| a != b)
             .map(|(a, b)| {
                 let (u, v) = (index[&a], index[&b]);
                 (u.min(v), u.max(v))
@@ -261,7 +332,8 @@ fn check_k_truss(name: &str, cpu_store: &LpgStore, gpu: &GpuGraph) {
 fn test_triangles_k4_cpu_vs_gpu() {
     let store = create_complete(4);
     let (_, gpu) = upload(&store, &device());
-    let cpu_count = algorithms::total_triangles(&store);
+    let snap = store.snap();
+    let cpu_count = algorithms::total_triangles(snap.store(), snap.view()).unwrap();
     let gpu_result = triangle_counting::triangle_count(&gpu).unwrap();
     assert_eq!(cpu_count, 4);
     assert_eq!(gpu_result.total_triangles, cpu_count);
@@ -272,7 +344,8 @@ fn test_triangles_k4_cpu_vs_gpu() {
 fn test_triangles_k5_cpu_vs_gpu() {
     let store = create_complete(5);
     let (_, gpu) = upload(&store, &device());
-    let cpu_count = algorithms::total_triangles(&store);
+    let snap = store.snap();
+    let cpu_count = algorithms::total_triangles(snap.store(), snap.view()).unwrap();
     let gpu_result = triangle_counting::triangle_count(&gpu).unwrap();
     assert_eq!(cpu_count, 10);
     assert_eq!(gpu_result.total_triangles, cpu_count);
@@ -305,7 +378,10 @@ fn test_ktruss_k5_cpu_vs_gpu() {
     let store = create_complete(5);
     let (_, gpu) = upload(&store, &device());
     assert_eq!(k_truss::k_truss(&gpu, 5).unwrap().edges.len(), 10);
-    assert!(k_truss::k_truss(&gpu, 6).unwrap().edges.is_empty());
+    assert_eq!(
+        k_truss::k_truss(&gpu, 6).unwrap().edges,
+        Vec::<(u32, u32)>::new()
+    );
     check_k_truss("K5", &store, &gpu);
 }
 
@@ -359,68 +435,53 @@ fn k_truss_matches_cpu_on_catalog() {
 // ---- export edge cases end to end ----
 
 /// GPU results on a graph with self-loops, parallel edges and a node deleted
-/// without its edges. The CPU reference uses a variant of the same graph where
-/// CPU and GPU semantics are known to agree:
-/// - the deleted node is detached first, because Grafeo's CPU traversals follow
-///   the leftover edges into the deleted node (the CSR export drops them);
-/// - no parallel edges for PageRank: the CSR export counts them once, Grafeo's
-///   CPU PageRank weighs them by multiplicity;
-/// - no self-loops for k-truss (see `check_k_truss`).
+/// without its edges, against Grafeo's CPU algorithms on the same graph. The
+/// PageRank reference has no parallel edges: the CSR export counts them once,
+/// Grafeo's directed CPU PageRank weighs them by multiplicity.
 #[test]
 #[ignore = "needs a CUDA device"]
 fn messy_graph_matches_cpu() {
     let device = device();
-    let (csr, gpu) = upload(&messy(true, true, false), &device);
+    let store = messy(true, true, false);
+    let (csr, gpu) = upload(&store, &device);
     assert_eq!(csr.num_nodes, 6);
-    let detached = export_to_csr(&messy(true, true, true), true);
+    let detached = messy(true, true, true).export(true);
     assert_eq!(
         (&csr.offsets, &csr.targets),
         (&detached.offsets, &detached.targets)
     );
 
-    check_triangles("messy", &messy(true, true, true), &csr, &gpu);
+    check_triangles("messy", &store, &csr, &gpu);
     for source in 0..csr.num_nodes {
-        check_bfs("messy", &messy(true, true, true), &gpu, source);
+        check_bfs("messy", &store, &gpu, source);
     }
-    check_pagerank("messy", &messy(true, false, true), &gpu);
-    check_k_truss("messy", &messy(false, true, true), &gpu);
+    check_pagerank("messy", &messy(true, false, false), &gpu);
+    check_k_truss("messy", &store, &gpu);
 }
 
 #[test]
 #[ignore = "needs a CUDA device"]
 fn grafeo_db_entry_point_matches_cpu() {
-    let db = grafeo_engine::GrafeoDB::new_in_memory();
-    let store = db.store();
+    let store = Db::new();
     let ids: Vec<_> = (0..5).map(|_| store.create_node(&["City"])).collect();
     for (a, b) in complete_edges(4) {
         store.create_edge(ids[a], ids[b], "ROAD");
         store.create_edge(ids[b], ids[a], "ROAD");
     }
-    let gpu = GpuGraph::from_grafeo(&db, &device()).unwrap();
+    let gpu = GpuGraph::from_grafeo(&store.0, &device()).unwrap();
     assert_eq!(gpu.num_nodes, 5);
     assert_eq!(gpu.num_edges, 12);
-    check_triangles("GrafeoDB", store, &export_to_csr(&**store, true), &gpu);
-    check_bfs("GrafeoDB", store, &gpu, 0);
-    check_bfs("GrafeoDB", store, &gpu, 4);
-    check_pagerank("GrafeoDB", store, &gpu);
-    check_k_truss("GrafeoDB", store, &gpu);
+    check_triangles("GrafeoDB", &store, &store.export(true), &gpu);
+    check_bfs("GrafeoDB", &store, &gpu, 0);
+    check_bfs("GrafeoDB", &store, &gpu, 4);
+    check_pagerank("GrafeoDB", &store, &gpu);
+    check_k_truss("GrafeoDB", &store, &gpu);
 }
 
 // ---- property tests ----
 
 fn random_edges() -> impl Strategy<Value = (usize, Vec<(usize, usize)>)> {
     (1usize..16).prop_flat_map(|n| (Just(n), prop::collection::vec((0..n, 0..n), 0..48)))
-}
-
-/// Drops self-loops and repeated pairs.
-fn simple_edges(edges: &[(usize, usize)]) -> Vec<(usize, usize)> {
-    edges
-        .iter()
-        .filter(|(a, b)| a != b)
-        .map(|&(a, b)| (a.min(b), a.max(b)))
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
 }
 
 /// Drops repeated pairs, keeps one copy of each self-loop.
@@ -447,6 +508,6 @@ proptest! {
         check_bfs("random", &raw, &gpu, 0);
         check_bfs("random", &raw, &gpu, (n - 1) as u32);
         check_pagerank("random", &undirected(n, &deduplicated_edges(&edges)), &gpu);
-        check_k_truss("random", &undirected(n, &simple_edges(&edges)), &gpu);
+        check_k_truss("random", &raw, &gpu);
     }
 }

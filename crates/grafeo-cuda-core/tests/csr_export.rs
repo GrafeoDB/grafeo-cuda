@@ -3,12 +3,101 @@
 
 use std::collections::{BTreeSet, HashMap};
 
-use grafeo_core::LpgStore;
+use grafeo_common::types::{EdgeId, NodeId, Value};
 use grafeo_cuda_core::{
     CsrArrays, CudaError, export_to_csr, from_edge_pairs, from_edge_pairs_oriented,
     parse_tsv_to_edges, validate_csr,
 };
+use grafeo_engine::GrafeoDB;
+use grafeo_engine::database::BatchEdge;
 use proptest::prelude::*;
+
+/// An in-memory `GrafeoDB` with the small write/read surface the tests use
+/// (grafeo 0.6 removed the standalone `LpgStore`; reads go through a
+/// `snapshot()`'s store and view).
+struct Db(GrafeoDB);
+
+impl Db {
+    fn new() -> Self {
+        Self(GrafeoDB::new_in_memory())
+    }
+
+    fn create_node(&self, labels: &[&str]) -> NodeId {
+        self.0.create_node(labels).unwrap()
+    }
+
+    fn create_edge(&self, src: NodeId, dst: NodeId, edge_type: &str) -> EdgeId {
+        self.0
+            .batch_create_edges(vec![BatchEdge::new(src, dst, edge_type)])
+            .unwrap()[0]
+    }
+
+    fn count(&self, query: &str, id: u64) -> i64 {
+        let result = self
+            .0
+            .session()
+            .execute_with_params(
+                query,
+                HashMap::from([("id".to_string(), Value::from(id as i64))]),
+            )
+            .unwrap();
+        match result.into_rows().first().and_then(|row| row.first()) {
+            Some(Value::Int64(i)) => *i,
+            _ => 0,
+        }
+    }
+
+    fn delete_edge(&self, id: EdgeId) -> bool {
+        let existed = self.count(
+            "MATCH ()-[r]->() WHERE id(r) = $id RETURN count(r) AS c",
+            id.0,
+        ) == 1;
+        if existed {
+            self.0
+                .session()
+                .execute_with_params(
+                    "MATCH ()-[r]->() WHERE id(r) = $id DELETE r",
+                    HashMap::from([("id".to_string(), Value::from(id.0 as i64))]),
+                )
+                .unwrap();
+        }
+        existed
+    }
+
+    fn delete_node_edges(&self, id: NodeId) {
+        self.0
+            .session()
+            .execute_with_params(
+                "MATCH (n)-[r]-() WHERE id(n) = $id DELETE r",
+                HashMap::from([("id".to_string(), Value::from(id.0 as i64))]),
+            )
+            .unwrap();
+    }
+
+    fn delete_node(&self, id: NodeId) -> bool {
+        let existed = self.count("MATCH (n) WHERE id(n) = $id RETURN count(n) AS c", id.0) == 1;
+        if existed {
+            self.0
+                .session()
+                .execute_with_params(
+                    "MATCH (n) WHERE id(n) = $id DETACH DELETE n",
+                    HashMap::from([("id".to_string(), Value::from(id.0 as i64))]),
+                )
+                .unwrap();
+        }
+        existed
+    }
+
+    fn node_ids(&self) -> Vec<NodeId> {
+        let snap = self.0.snapshot().unwrap();
+        snap.store().node_ids(snap.view()).unwrap()
+    }
+
+    fn export(&self, symmetric: bool) -> CsrArrays {
+        let snap = self.0.snapshot().unwrap();
+        export_to_csr(snap.store(), snap.view(), symmetric).unwrap()
+    }
+}
 
 // ---- helpers ----
 
@@ -50,8 +139,8 @@ fn assert_symmetric(csr: &CsrArrays) {
     }
 }
 
-fn person_store(n: usize) -> LpgStore {
-    let store = LpgStore::new().unwrap();
+fn person_store(n: usize) -> Db {
+    let store = Db::new();
     for _ in 0..n {
         store.create_node(&["Person"]);
     }
@@ -62,9 +151,9 @@ fn person_store(n: usize) -> LpgStore {
 
 #[test]
 fn empty_store_exports_single_offset() {
-    let store = LpgStore::new().unwrap();
+    let store = Db::new();
     for symmetric in [false, true] {
-        let csr = export_to_csr(&store, symmetric);
+        let csr = store.export(symmetric);
         assert_csr_eq(&csr, &[0], &[]);
     }
 }
@@ -73,64 +162,64 @@ fn empty_store_exports_single_offset() {
 fn isolated_nodes_get_empty_lists() {
     let store = person_store(3);
     for symmetric in [false, true] {
-        let csr = export_to_csr(&store, symmetric);
+        let csr = store.export(symmetric);
         assert_csr_eq(&csr, &[0, 0, 0, 0], &[]);
     }
 }
 
 #[test]
 fn directed_export_keeps_only_outgoing_edges() {
-    let store = LpgStore::new().unwrap();
+    let store = Db::new();
     let alix = store.create_node(&["Person"]);
     let gus = store.create_node(&["Person"]);
     let vincent = store.create_node(&["Person"]);
     store.create_edge(alix, gus, "KNOWS");
     store.create_edge(vincent, gus, "KNOWS");
 
-    let directed = export_to_csr(&store, false);
+    let directed = store.export(false);
     assert_csr_eq(&directed, &[0, 1, 1, 2], &[1, 1]);
 
-    let symmetric = export_to_csr(&store, true);
+    let symmetric = store.export(true);
     assert_csr_eq(&symmetric, &[0, 1, 3, 4], &[1, 0, 2, 1]);
     assert_symmetric(&symmetric);
 }
 
 #[test]
 fn self_loops_appear_once() {
-    let store = LpgStore::new().unwrap();
+    let store = Db::new();
     let alix = store.create_node(&["Person"]);
     let gus = store.create_node(&["Person"]);
     store.create_edge(alix, alix, "KNOWS");
     store.create_edge(alix, gus, "KNOWS");
 
-    let directed = export_to_csr(&store, false);
+    let directed = store.export(false);
     assert_csr_eq(&directed, &[0, 2, 2], &[0, 1]);
 
     // The symmetric pass visits the loop twice (as u -> v and v -> u); it must
     // still produce a single entry.
-    let symmetric = export_to_csr(&store, true);
+    let symmetric = store.export(true);
     assert_csr_eq(&symmetric, &[0, 2, 3], &[0, 1, 0]);
 }
 
 #[test]
 fn parallel_edges_collapse() {
-    let store = LpgStore::new().unwrap();
+    let store = Db::new();
     let alix = store.create_node(&["Person"]);
     let gus = store.create_node(&["Person"]);
     store.create_edge(alix, gus, "KNOWS");
     store.create_edge(alix, gus, "LIKES");
     store.create_edge(gus, alix, "KNOWS");
 
-    let directed = export_to_csr(&store, false);
+    let directed = store.export(false);
     assert_csr_eq(&directed, &[0, 1, 2], &[1, 0]);
 
-    let symmetric = export_to_csr(&store, true);
+    let symmetric = store.export(true);
     assert_csr_eq(&symmetric, &[0, 1, 2], &[1, 0]);
 }
 
 /// Builds Alix -> Gus -> Vincent -> Jules and Alix -> Jules, then deletes Gus.
-fn store_with_deleted_middle_node(detach: bool) -> LpgStore {
-    let store = LpgStore::new().unwrap();
+fn store_with_deleted_middle_node(detach: bool) -> Db {
+    let store = Db::new();
     let alix = store.create_node(&["Person"]);
     let gus = store.create_node(&["Person"]);
     let vincent = store.create_node(&["Person"]);
@@ -154,17 +243,17 @@ fn deleted_node_leaves_no_index_gap() {
 
         // Live nodes Alix, Vincent, Jules become 0, 1, 2. Edges touching Gus
         // disappear even when they were not deleted with him.
-        let directed = export_to_csr(&store, false);
+        let directed = store.export(false);
         assert_csr_eq(&directed, &[0, 1, 2, 2], &[2, 2]);
 
-        let symmetric = export_to_csr(&store, true);
+        let symmetric = store.export(true);
         assert_csr_eq(&symmetric, &[0, 1, 2, 4], &[2, 2, 0, 1]);
     }
 }
 
 #[test]
 fn deleted_edges_are_skipped() {
-    let store = LpgStore::new().unwrap();
+    let store = Db::new();
     let amsterdam = store.create_node(&["City"]);
     let berlin = store.create_node(&["City"]);
     let paris = store.create_node(&["City"]);
@@ -176,7 +265,7 @@ fn deleted_edges_are_skipped() {
     assert!(store.delete_edge(gone));
     assert!(store.delete_edge(first));
 
-    let directed = export_to_csr(&store, false);
+    let directed = store.export(false);
     assert_csr_eq(&directed, &[0, 1, 2, 2], &[2, 2]);
 }
 
@@ -189,7 +278,7 @@ fn csr_index_follows_node_ids_order() {
     store.delete_node(ids[2]);
 
     let live = store.node_ids();
-    let csr = export_to_csr(&store, false);
+    let csr = store.export(false);
     assert_eq!(csr.num_nodes as usize, live.len());
     let from = live.iter().position(|&id| id == ids[4]).unwrap() as u32;
     let to = live.iter().position(|&id| id == ids[0]).unwrap() as u32;
@@ -222,8 +311,8 @@ fn graph_spec() -> impl Strategy<Value = GraphSpec> {
     })
 }
 
-fn build_store(spec: &GraphSpec) -> LpgStore {
-    let store = LpgStore::new().unwrap();
+fn build_store(spec: &GraphSpec) -> Db {
+    let store = Db::new();
     let ids: Vec<_> = (0..spec.nodes)
         .map(|_| store.create_node(&["Person"]))
         .collect();
@@ -275,7 +364,7 @@ proptest! {
     #[test]
     fn export_matches_reference_model(spec in graph_spec(), symmetric in any::<bool>()) {
         let store = build_store(&spec);
-        let csr = export_to_csr(&store, symmetric);
+        let csr = store.export(symmetric);
         let (offsets, targets) = expected_csr(&spec, symmetric);
         prop_assert!(csr.validate().is_ok(), "{:?}", csr.validate());
         prop_assert_eq!(&csr.offsets, &offsets);
@@ -302,7 +391,7 @@ proptest! {
         for &(s, d) in &edges {
             store.create_edge(ids[s as usize], ids[d as usize], "KNOWS");
         }
-        let from_store = export_to_csr(&store, symmetric);
+        let from_store = store.export(symmetric);
         let from_pairs = from_edge_pairs(&edges, nodes, symmetric);
         prop_assert!(from_pairs.validate().is_ok(), "{:?}", from_pairs.validate());
         prop_assert_eq!(from_store.offsets, from_pairs.offsets);
@@ -423,8 +512,7 @@ fn tsv_parser_handles_large_ids_and_empty_files() {
 
     let empty = TempFile::new("empty", "# nothing here\n");
     let (edges, nodes) = parse_tsv_to_edges(&empty.0).unwrap();
-    assert!(edges.is_empty());
-    assert_eq!(nodes, 0);
+    assert_eq!((edges, nodes), (vec![], 0));
 }
 
 #[test]

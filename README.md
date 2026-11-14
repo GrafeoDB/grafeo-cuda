@@ -26,7 +26,7 @@ transferred back to host memory.
 
 ### Prerequisites
 
-To build: Rust 1.91.1+. No CUDA toolkit is needed.
+To build: Rust 1.99.0+. No CUDA toolkit is needed.
 
 To run:
 
@@ -42,12 +42,13 @@ the MSVC build tools), see [CUDA kernels and PTX](#cuda-kernels-and-ptx).
 
 ### Grafeo dependency
 
-Grafeo comes from crates.io. The workspace depends on the implementation crates
-`grafeo-engine`, `grafeo-core` and `grafeo-adapters`, pinned to an exact version
-(`=0.5.44`) because their API may change in any Grafeo release. The stable
-`grafeo` crate does not yet re-export everything this workspace needs
-(`Direction`, used to walk edges through `GraphStore`, and the CPU reference
-algorithms used by the tests). Bump all pins together.
+grafeo-cuda 0.2 works with Grafeo 0.6. Grafeo comes from crates.io. The
+workspace depends on the implementation crates `grafeo-engine`, `grafeo-core`
+and `grafeo-adapters`, pinned to an exact version (`=0.6.2`) because
+their API may change in any Grafeo release. The stable `grafeo` crate does not
+yet re-export everything this workspace needs (`Direction`, used to walk edges
+through `GraphStore`, and the CPU reference algorithms used by the tests). Bump
+all pins together.
 
 To build against a local Grafeo checkout instead, uncomment the
 `[patch.crates-io]` section at the end of `Cargo.toml`. The patch only applies
