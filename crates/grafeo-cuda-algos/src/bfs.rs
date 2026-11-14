@@ -9,14 +9,13 @@
 //!
 //! This is the core of the Graph500 TEPS (Traversed Edges Per Second) benchmark.
 
-use std::sync::OnceLock;
 use std::time::Instant;
 
-use cudarc::driver::{LaunchConfig, PushKernelArg};
+use cudarc::driver::PushKernelArg;
 use grafeo_cuda_core::error::CudaError;
 use grafeo_cuda_core::gpu_graph::GpuGraph;
 
-use crate::module_cache;
+use crate::{launch, module_cache};
 
 /// Result of GPU BFS.
 #[derive(Debug, Clone)]
@@ -32,13 +31,14 @@ pub struct BfsResult {
     pub time_seconds: f64,
 }
 
-const PTX: &str = include_str!("../../../kernels/compiled/bfs.ptx");
-static MODULE: OnceLock<module_cache::CachedModule> = OnceLock::new();
+pub(crate) const PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/ptx/bfs.ptx"));
+static MODULE: module_cache::ModuleCache = module_cache::ModuleCache::new();
 
 /// Run BFS from a source node on the GPU.
 ///
 /// Uses frontier-based expansion for O(E) total work instead of O(V * depth).
-/// The `source` parameter is the 0-based contiguous node index.
+/// The `source` parameter is the 0-based contiguous node index. The graph is
+/// traversed along its CSR lists, so a symmetric CSR gives undirected BFS.
 pub fn bfs(graph: &GpuGraph, source: u32) -> Result<BfsResult, CudaError> {
     let start = Instant::now();
     let n = graph.num_nodes as usize;
@@ -64,10 +64,12 @@ pub fn bfs(graph: &GpuGraph, source: u32) -> Result<BfsResult, CudaError> {
     distances_host[source as usize] = 0;
     let mut distances_gpu = graph.stream.clone_htod(&distances_host)?;
 
-    // Frontier buffers: double-buffer pattern (ping-pong)
-    // Max frontier size is bounded by num_nodes
-    let mut frontier_a = graph.stream.clone_htod(&[source])?;
-    let mut frontier_b = graph.stream.clone_htod(&vec![0u32; n])?;
+    // Frontier buffers: double-buffer pattern (ping-pong). Each node enters a
+    // frontier at most once, so `n` entries bound every frontier. Both buffers
+    // need the full size because they swap roles after every level.
+    let mut frontier_a = graph.stream.alloc_zeros::<u32>(n)?;
+    graph.stream.memcpy_htod(&[source], &mut frontier_a)?;
+    let mut frontier_b = graph.stream.alloc_zeros::<u32>(n)?;
     let mut frontier_size_buf = graph.stream.clone_htod(&[0u32])?;
 
     let mut current_frontier_size = 1u32;
@@ -77,15 +79,11 @@ pub fn bfs(graph: &GpuGraph, source: u32) -> Result<BfsResult, CudaError> {
         // Reset output frontier size to 0
         graph.stream.memcpy_htod(&[0u32], &mut frontier_size_buf)?;
 
-        let threads_per_block = 256u32;
-        let num_blocks = current_frontier_size.div_ceil(threads_per_block);
-        let config = LaunchConfig {
-            grid_dim: (num_blocks, 1, 1),
-            block_dim: (threads_per_block, 1, 1),
-            shared_mem_bytes: 0,
-        };
+        let config = launch::thread_per_item(current_frontier_size);
 
-        // SAFETY: all device pointers are valid. frontier_a has current_frontier_size entries.
+        // SAFETY: the CSR was validated on transfer, so every target indexes
+        // `distances`. frontier_a holds current_frontier_size entries and
+        // frontier_b has room for all n nodes, the most any level can add.
         unsafe {
             graph
                 .stream

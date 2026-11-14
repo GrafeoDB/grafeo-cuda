@@ -1,118 +1,78 @@
-//! Build script: compile CUDA kernels to PTX via nvcc.
+//! Build script: provide the PTX for the CUDA kernels in `kernels/`.
 //!
-//! Looks for `.cu` files in `kernels/` (at workspace root) and compiles each to
-//! `kernels/compiled/<name>.ptx`. If nvcc is not found, emits a warning
-//! and creates empty placeholder PTX files (allows building on machines
-//! without the CUDA toolkit, but GPU features will fail at runtime).
+//! By default the committed PTX in `kernels/ptx/` is used, so building needs no
+//! CUDA toolkit and the result does not depend on the build machine. The build
+//! stops if `kernels/ptx/manifest.toml` does not match the `.cu` sources: run
+//! `cargo xtask regenerate-ptx` (needs nvcc) and commit `kernels/ptx/`.
+//!
+//! With `GRAFEO_CUDA_BUILD_PTX=1` the kernels are compiled with nvcc instead,
+//! for this build only. Either way the PTX goes to `OUT_DIR/ptx/`; this script
+//! never writes into the source tree.
 
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::PathBuf;
+
+#[path = "build_support/ptx_common.rs"]
+mod ptx_common;
+
+use ptx_common::BUILD_ENV;
 
 fn main() {
-    // Workspace root is two levels up from this crate
-    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
+    let manifest_dir =
+        PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    let kernels_dir = manifest_dir.join("kernels");
+    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR")).join("ptx");
+    std::fs::create_dir_all(&out_dir).expect("cannot create OUT_DIR/ptx");
 
-    let kernels_dir = workspace_root.join("kernels");
-    let compiled_dir = kernels_dir.join("compiled");
-    fs::create_dir_all(&compiled_dir).expect("failed to create kernels/compiled/");
+    println!("cargo:rerun-if-changed=kernels");
+    println!("cargo:rerun-if-changed=build_support");
+    println!("cargo:rerun-if-env-changed={BUILD_ENV}");
 
-    let cu_files: Vec<_> = fs::read_dir(&kernels_dir)
-        .expect("failed to read kernels/")
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("cu") {
-                Some(path)
-            } else {
-                None
+    let sources = ptx_common::kernel_sources(&kernels_dir).unwrap_or_else(|e| panic!("{e}"));
+    let verified = ptx_common::verify(&kernels_dir);
+
+    let compile = std::env::var(BUILD_ENV).is_ok_and(|v| v == "1");
+    let ptx_isa = if compile {
+        if let Err(problems) = &verified {
+            for problem in problems {
+                println!(
+                    "cargo:warning=committed PTX is out of date ({problem}); \
+                     run `cargo xtask regenerate-ptx` before committing"
+                );
             }
-        })
-        .collect();
-
-    let nvcc_available = Command::new("nvcc").arg("--version").output().is_ok();
-
-    for cu_path in &cu_files {
-        let stem = cu_path.file_stem().unwrap().to_str().unwrap();
-        let ptx_path = compiled_dir.join(format!("{stem}.ptx"));
-
-        // Rerun if kernel source changes
-        println!("cargo:rerun-if-changed={}", cu_path.display());
-
-        if nvcc_available {
-            let mut cmd = Command::new("nvcc");
-            cmd.args([
-                "--ptx",
-                "-O3",
-                "-arch=sm_70", // Compute Capability 7.0 (RTX 20xx+)
-                "-o",
-                ptx_path.to_str().unwrap(),
-                cu_path.to_str().unwrap(),
-            ]);
-
-            // On Windows, nvcc needs cl.exe in PATH. Auto-detect from VS Build Tools.
-            if cfg!(target_os = "windows")
-                && let Some(cl_dir) = find_msvc_cl_dir()
-            {
-                cmd.arg(format!("-ccbin={}", cl_dir.display()));
-            }
-
-            let status = cmd.status().expect("failed to run nvcc");
-            assert!(
-                status.success(),
-                "nvcc failed to compile {}",
-                cu_path.display()
-            );
-        } else {
-            // Create placeholder PTX so include_str!() does not fail at compile time.
-            // GPU functions will return errors at runtime.
-            println!(
-                "cargo:warning=nvcc not found; creating placeholder PTX for {}",
-                cu_path.display()
-            );
-            fs::write(
-                &ptx_path,
-                format!("// Placeholder: nvcc was not available during build for {stem}.cu\n"),
+        }
+        let mut isa = String::new();
+        for (name, source) in &sources {
+            let target = out_dir.join(format!("{name}.ptx"));
+            ptx_common::compile(source, &target)
+                .unwrap_or_else(|e| panic!("{BUILD_ENV}=1 is set, but {e}"));
+            let ptx = std::fs::read_to_string(&target).expect("cannot read compiled PTX");
+            isa = ptx_common::ptx_isa(&ptx)
+                .unwrap_or_else(|| panic!("{name}.ptx has no .version directive"))
+                .to_string();
+        }
+        isa
+    } else {
+        let manifest = verified.unwrap_or_else(|problems| {
+            panic!(
+                "the committed PTX in kernels/ptx/ does not match the kernel sources:\n  - {}\n\
+                 Regenerate it with `cargo xtask regenerate-ptx` (needs nvcc) and commit \
+                 kernels/ptx/, or set {BUILD_ENV}=1 to compile the kernels with nvcc for \
+                 this build only.",
+                problems.join("\n  - ")
             )
-            .expect("failed to write placeholder PTX");
+        });
+        for (name, _) in &sources {
+            let file = format!("{name}.ptx");
+            std::fs::copy(
+                kernels_dir.join(ptx_common::PTX_DIR).join(&file),
+                out_dir.join(&file),
+            )
+            .unwrap_or_else(|e| panic!("cannot copy {file} to OUT_DIR: {e}"));
         }
-    }
-}
+        manifest.ptx_isa
+    };
 
-/// Search for the MSVC cl.exe directory (Windows only).
-///
-/// Checks VS 2022 Build Tools locations in both Program Files directories.
-fn find_msvc_cl_dir() -> Option<PathBuf> {
-    let candidates = [
-        r"C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC",
-        r"C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC",
-        r"C:\Program Files\Microsoft Visual Studio\2022\Professional\VC\Tools\MSVC",
-        r"C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Tools\MSVC",
-    ];
-
-    for base in &candidates {
-        let base_path = Path::new(base);
-        if !base_path.exists() {
-            continue;
-        }
-        // Pick the latest MSVC version directory
-        if let Ok(entries) = fs::read_dir(base_path) {
-            let mut versions: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.is_dir())
-                .collect();
-            versions.sort();
-            if let Some(latest) = versions.last() {
-                let cl_dir = latest.join("bin").join("Hostx64").join("x64");
-                if cl_dir.join("cl.exe").exists() {
-                    return Some(cl_dir);
-                }
-            }
-        }
-    }
-    None
+    println!("cargo:rustc-env=GRAFEO_CUDA_PTX_ISA={ptx_isa}");
+    let origin = if compile { "nvcc" } else { "committed" };
+    println!("cargo:rustc-env=GRAFEO_CUDA_PTX_ORIGIN={origin}");
 }

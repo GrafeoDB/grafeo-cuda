@@ -1,18 +1,21 @@
 //! GPU PageRank via iterative sparse matrix-vector multiplication (SpMV).
 //!
-//! Each iteration: rank_new[v] = (1-d)/N + d * sum(rank[u] / deg[u]) for all in-neighbors u of v.
-//! Convergence is checked on-device via a reduction kernel (no per-iteration D2H transfers).
+//! Each iteration: rank_new[v] = (1-d)/N + d * (sum(rank[u] / deg[u]) + dangling/N)
+//! for all in-neighbors u of v, where `dangling` is the total rank of nodes
+//! without outgoing edges. Spreading that rank over all nodes keeps the ranks
+//! summing to 1 and matches Grafeo's CPU PageRank.
+//! Convergence is checked on-device via a reduction kernel (no per-iteration D2H
+//! transfers of the rank vectors).
 //!
 //! Requires symmetric CSR (undirected) or a transpose CSR for directed graphs.
 
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use cudarc::driver::{LaunchConfig, PushKernelArg};
 use grafeo_cuda_core::error::CudaError;
 use grafeo_cuda_core::gpu_graph::GpuGraph;
 
-use crate::module_cache;
+use crate::{launch, module_cache};
 
 /// Result of GPU PageRank computation.
 #[derive(Debug, Clone)]
@@ -27,14 +30,19 @@ pub struct PageRankResult {
     pub time_seconds: f64,
 }
 
-const PTX: &str = include_str!("../../../kernels/compiled/pagerank.ptx");
-static MODULE: OnceLock<module_cache::CachedModule> = OnceLock::new();
+pub(crate) const PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/ptx/pagerank.ptx"));
+static MODULE: module_cache::ModuleCache = module_cache::ModuleCache::new();
 
 /// Run PageRank on the GPU.
 ///
 /// Uses iterative SpMV with configurable damping factor, maximum iterations,
 /// and convergence tolerance. Convergence is checked entirely on-device via
-/// a shared-memory reduction kernel.
+/// a shared-memory reduction kernel: the run stops once the L1 norm of the
+/// change between two iterations drops below `tolerance`. (Grafeo's CPU
+/// PageRank compares the largest per-node change instead.)
+///
+/// Ranks are `f32`. Parallel edges count once, because the CSR export
+/// deduplicates them; Grafeo's CPU PageRank weighs them by multiplicity.
 pub fn pagerank(
     graph: &GpuGraph,
     damping: f32,
@@ -43,6 +51,16 @@ pub fn pagerank(
 ) -> Result<PageRankResult, CudaError> {
     let start = Instant::now();
     let n = graph.num_nodes as usize;
+
+    // No nodes, no ranks; the driver would also reject the empty grid.
+    if n == 0 {
+        return Ok(PageRankResult {
+            ranks: Vec::new(),
+            iterations: 0,
+            converged: true,
+            time_seconds: start.elapsed().as_secs_f64(),
+        });
+    }
 
     let ctx = graph.stream.context();
     let funcs = module_cache::get_or_load(
@@ -53,28 +71,24 @@ pub fn pagerank(
             "pagerank_iteration_kernel",
             "compute_out_degrees_kernel",
             "pagerank_diff_kernel",
+            "pagerank_dangling_sum_kernel",
         ],
     )?;
     let iter_func = &funcs[0];
     let degree_func = &funcs[1];
     let diff_func = &funcs[2];
+    let dangling_func = &funcs[3];
 
     // Initialize uniform ranks
     let initial_rank = 1.0f32 / n as f32;
     let mut ranks_a = graph.stream.clone_htod(&vec![initial_rank; n])?;
-    let mut ranks_b = graph.stream.clone_htod(&vec![0.0f32; n])?;
+    let mut ranks_b = graph.stream.alloc_zeros::<f32>(n)?;
 
     // Compute out-degrees on GPU
-    let mut out_degrees = graph.stream.clone_htod(&vec![0u32; n])?;
-    let threads_per_block = 256u32;
-    let num_blocks = graph.num_nodes.div_ceil(threads_per_block);
-    let config = LaunchConfig {
-        grid_dim: (num_blocks, 1, 1),
-        block_dim: (threads_per_block, 1, 1),
-        shared_mem_bytes: 0,
-    };
+    let mut out_degrees = graph.stream.alloc_zeros::<u32>(n)?;
+    let config = launch::thread_per_item(graph.num_nodes);
 
-    // SAFETY: all device pointers are valid and correctly sized for num_nodes.
+    // SAFETY: offsets has num_nodes + 1 entries and out_degrees num_nodes.
     unsafe {
         graph
             .stream
@@ -86,20 +100,37 @@ pub fn pagerank(
     }
     .map_err(|e| CudaError::Kernel(format!("degree kernel failed: {e}")))?;
 
-    // Diff buffer for on-device convergence check (single f32 accumulator)
-    let mut diff_buf = graph.stream.clone_htod(&[0.0f32])?;
+    // Single f32 accumulators for the dangling rank and the convergence check.
+    let mut dangling_buf = graph.stream.alloc_zeros::<f32>(1)?;
+    let mut diff_buf = graph.stream.alloc_zeros::<f32>(1)?;
 
-    let diff_config = LaunchConfig {
-        grid_dim: (num_blocks, 1, 1),
-        block_dim: (threads_per_block, 1, 1),
-        shared_mem_bytes: threads_per_block * 4, // sizeof(float) per thread
+    let reduce_config = LaunchConfig {
+        shared_mem_bytes: launch::THREADS_PER_BLOCK * 4, // sizeof(float) per thread
+        ..config
     };
 
     let mut converged = false;
     let mut iterations = 0u32;
 
     for _ in 0..max_iterations {
-        // SAFETY: ranks_a (input) and ranks_b (output) are valid device buffers of size n.
+        graph.stream.memset_zeros(&mut dangling_buf)?;
+
+        // SAFETY: ranks_a and out_degrees hold num_nodes entries; dangling_buf one.
+        unsafe {
+            graph
+                .stream
+                .launch_builder(dangling_func)
+                .arg(&ranks_a)
+                .arg(&out_degrees)
+                .arg(&graph.num_nodes)
+                .arg(&mut dangling_buf)
+                .launch(reduce_config)
+        }
+        .map_err(|e| CudaError::Kernel(format!("dangling kernel failed: {e}")))?;
+
+        // SAFETY: the CSR was validated on transfer, so every target indexes
+        // ranks_a and out_degrees. ranks_a (input) and ranks_b (output) are
+        // valid device buffers of size n.
         unsafe {
             graph
                 .stream
@@ -109,6 +140,7 @@ pub fn pagerank(
                 .arg(&ranks_a)
                 .arg(&mut ranks_b)
                 .arg(&out_degrees)
+                .arg(&dangling_buf)
                 .arg(&graph.num_nodes)
                 .arg(&damping)
                 .launch(config)
@@ -118,8 +150,9 @@ pub fn pagerank(
         iterations += 1;
 
         // Compute L1 norm of (ranks_a - ranks_b) entirely on GPU
-        graph.stream.memcpy_htod(&[0.0f32], &mut diff_buf)?;
+        graph.stream.memset_zeros(&mut diff_buf)?;
 
+        // SAFETY: both rank buffers hold num_nodes entries; diff_buf one.
         unsafe {
             graph
                 .stream
@@ -128,7 +161,7 @@ pub fn pagerank(
                 .arg(&ranks_b)
                 .arg(&graph.num_nodes)
                 .arg(&mut diff_buf)
-                .launch(diff_config)
+                .launch(reduce_config)
         }
         .map_err(|e| CudaError::Kernel(format!("diff kernel failed: {e}")))?;
 
@@ -141,13 +174,12 @@ pub fn pagerank(
         let diff_host = graph.stream.clone_dtoh(&diff_buf)?;
         let diff = diff_host[0];
 
+        std::mem::swap(&mut ranks_a, &mut ranks_b);
+
         if diff < tolerance {
             converged = true;
-            std::mem::swap(&mut ranks_a, &mut ranks_b);
             break;
         }
-
-        std::mem::swap(&mut ranks_a, &mut ranks_b);
     }
 
     graph

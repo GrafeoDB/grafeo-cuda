@@ -8,14 +8,13 @@
 //! 1. `edge_triangle_support_kernel`: compute per-edge triangle support
 //! 2. `edge_filter_kernel`: remove edges below the threshold
 
-use std::sync::OnceLock;
 use std::time::Instant;
 
-use cudarc::driver::{LaunchConfig, PushKernelArg};
+use cudarc::driver::PushKernelArg;
 use grafeo_cuda_core::error::CudaError;
 use grafeo_cuda_core::gpu_graph::GpuGraph;
 
-use crate::module_cache;
+use crate::{launch, module_cache};
 
 /// Result of GPU k-truss decomposition.
 #[derive(Debug, Clone)]
@@ -30,8 +29,8 @@ pub struct KTrussResult {
     pub time_seconds: f64,
 }
 
-const PTX: &str = include_str!("../../../kernels/compiled/k_truss.ptx");
-static MODULE: OnceLock<module_cache::CachedModule> = OnceLock::new();
+pub(crate) const PTX: &str = include_str!(concat!(env!("OUT_DIR"), "/ptx/k_truss.ptx"));
+static MODULE: module_cache::ModuleCache = module_cache::ModuleCache::new();
 
 /// Extract the k-truss from the graph.
 ///
@@ -39,6 +38,7 @@ static MODULE: OnceLock<module_cache::CachedModule> = OnceLock::new();
 /// iterative peeling. The graph must use symmetric CSR (undirected).
 ///
 /// k must be >= 3 (a 3-truss means every edge is in at least 1 triangle).
+/// Self-loops never belong to a truss: they are peeled in the first round.
 pub fn k_truss(graph: &GpuGraph, k: u32) -> Result<KTrussResult, CudaError> {
     if k < 3 {
         return Err(CudaError::Kernel(
@@ -48,6 +48,16 @@ pub fn k_truss(graph: &GpuGraph, k: u32) -> Result<KTrussResult, CudaError> {
 
     let start = Instant::now();
     let threshold = k - 2;
+
+    // No edges, no truss; the driver would also reject the empty grids.
+    if graph.num_edges == 0 {
+        return Ok(KTrussResult {
+            edges: Vec::new(),
+            k,
+            iterations: 0,
+            time_seconds: start.elapsed().as_secs_f64(),
+        });
+    }
 
     let ctx = graph.stream.context();
     let funcs = module_cache::get_or_load(
@@ -62,31 +72,22 @@ pub fn k_truss(graph: &GpuGraph, k: u32) -> Result<KTrussResult, CudaError> {
     let num_edges = graph.num_edges;
 
     // Per-edge support count and removed mask (on GPU)
-    let mut support = graph.stream.clone_htod(&vec![0u32; num_edges as usize])?;
-    let mut removed = graph.stream.clone_htod(&vec![0u8; num_edges as usize])?;
-    let mut removed_count = graph.stream.clone_htod(&[0u32])?;
+    let mut support = graph.stream.alloc_zeros::<u32>(num_edges as usize)?;
+    let mut removed = graph.stream.alloc_zeros::<u8>(num_edges as usize)?;
+    let mut removed_count = graph.stream.alloc_zeros::<u32>(1)?;
 
-    let node_config = LaunchConfig {
-        grid_dim: (graph.num_nodes.div_ceil(256), 1, 1),
-        block_dim: (256, 1, 1),
-        shared_mem_bytes: 0,
-    };
-
-    let edge_config = LaunchConfig {
-        grid_dim: (num_edges.div_ceil(256), 1, 1),
-        block_dim: (256, 1, 1),
-        shared_mem_bytes: 0,
-    };
+    let node_config = launch::thread_per_item(graph.num_nodes);
+    let edge_config = launch::thread_per_item(num_edges);
 
     let mut iterations = 0u32;
 
     loop {
         // Reset support to 0
-        graph
-            .stream
-            .memcpy_htod(&vec![0u32; num_edges as usize], &mut support)?;
+        graph.stream.memset_zeros(&mut support)?;
 
         // Compute triangle support for each edge
+        // SAFETY: the CSR was validated on transfer, so every target indexes
+        // offsets; support and removed hold one entry per CSR entry.
         unsafe {
             graph
                 .stream
@@ -101,9 +102,10 @@ pub fn k_truss(graph: &GpuGraph, k: u32) -> Result<KTrussResult, CudaError> {
         .map_err(|e| CudaError::Kernel(format!("support kernel failed: {e}")))?;
 
         // Reset removed count
-        graph.stream.memcpy_htod(&[0u32], &mut removed_count)?;
+        graph.stream.memset_zeros(&mut removed_count)?;
 
         // Filter edges below threshold
+        // SAFETY: support and removed hold num_edges entries; removed_count one.
         unsafe {
             graph
                 .stream

@@ -9,17 +9,24 @@ permissions:
   id-token: write
   contents: read
 
+# Wheels embed the PTX committed in crates/grafeo-cuda-algos/kernels/ptx/, so
+# the hosted runners need no CUDA toolkit and every wheel carries the same
+# kernels. The build fails if that PTX does not match the kernel sources; the
+# explicit check below reports it before any build starts.
+#
+# The binding is abi3 (pyo3 `abi3-py312`), so each platform gets one wheel,
+# tagged cp312-abi3, that installs on CPython 3.12 and every later version.
+
 jobs:
   build-sdist:
     name: Build source distribution
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check committed PTX matches the kernel sources
+        run: cargo xtask check-ptx
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Build sdist
@@ -27,7 +34,7 @@ jobs:
         with:
           command: sdist
           args: --out dist -m crates/bindings/python/Cargo.toml
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: dist
@@ -36,12 +43,11 @@ jobs:
     name: Build Linux wheel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check committed PTX matches the kernel sources
+        run: cargo xtask check-ptx
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Build wheel
@@ -51,7 +57,7 @@ jobs:
           args: --release --out dist --find-interpreter -m crates/bindings/python/Cargo.toml
           manylinux: auto
           sccache: true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-linux
           path: dist
@@ -60,12 +66,11 @@ jobs:
     name: Build Windows wheel
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/checkout@v4
-        with:
-          repository: GrafeoDB/grafeo
-          path: ../grafeo
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check committed PTX matches the kernel sources
+        run: cargo xtask check-ptx
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Build wheel
@@ -74,7 +79,7 @@ jobs:
           target: x64
           args: --release --out dist -m crates/bindings/python/Cargo.toml
           sccache: true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-windows
           path: dist
@@ -85,7 +90,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true

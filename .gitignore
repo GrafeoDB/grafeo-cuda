@@ -2,9 +2,6 @@
 target/
 *.rlib
 
-# CUDA compiled kernels
-kernels/compiled/
-
 # Python
 __pycache__/
 *.pyc

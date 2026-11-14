@@ -29,4 +29,11 @@ pub enum CudaError {
     /// Failed to export the graph from Grafeo to CSR format.
     #[error("CSR export failed: {0}")]
     Export(String),
+
+    /// CSR arrays handed to the GPU are malformed (see [`crate::validate_csr`]).
+    ///
+    /// Rejected before any transfer, because the kernels index `offsets` and
+    /// `targets` without bounds checks.
+    #[error("invalid CSR: {0}")]
+    InvalidCsr(String),
 }
