@@ -518,7 +518,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cuda-algos"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "cudarc",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cuda-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cudarc",
  "grafeo-common",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cuda-python"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "grafeo-cuda-algos",
  "grafeo-cuda-core",

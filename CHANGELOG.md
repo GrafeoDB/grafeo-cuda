@@ -2,7 +2,7 @@
 
 All notable changes to this project are documented in this file.
 
-## [0.3.0] - Unreleased
+## [0.3.0] - 2026-11-16
 
 Toolchain release: grafeo-cuda follows grafeo 0.6.3 and needs Rust 1.100 or newer to build; stay on 0.2.0 for grafeo 0.6.2 or an older Rust. From the next release on, grafeo-cuda carries grafeo's version number and ships with it.
 

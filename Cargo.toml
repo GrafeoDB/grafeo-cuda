@@ -12,7 +12,7 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.100.0"
 license = "Apache-2.0"
@@ -21,8 +21,8 @@ authors = ["S.T. Grond"]
 
 [workspace.dependencies]
 # Internal crates
-grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.2.0" }
-grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.2.0" }
+grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.3.0" }
+grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.3.0" }
 
 # Grafeo implementation crates, pinned exactly.
 #
