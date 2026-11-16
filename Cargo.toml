@@ -12,18 +12,17 @@ default-members = [
 ]
 
 [workspace.package]
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
-rust-version = "1.99.0"
+rust-version = "1.100.0"
 license = "Apache-2.0"
 repository = "https://github.com/GrafeoDB/grafeo-cuda"
 authors = ["S.T. Grond"]
-description = "GPU-accelerated graph algorithms for the Grafeo graph database."
 
 [workspace.dependencies]
 # Internal crates
-grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.2.0" }
-grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.2.0" }
+grafeo-cuda-core = { path = "crates/grafeo-cuda-core", version = "0.3.0" }
+grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.3.0" }
 
 # Grafeo implementation crates, pinned exactly.
 #
@@ -34,10 +33,10 @@ grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.2.0" }
 # Implementation crates may change their API in any release, so they are pinned
 # with `=` and bumped deliberately together. To build against a local Grafeo
 # checkout, uncomment the `[patch.crates-io]` section at the bottom of this file.
-grafeo-engine = { version = "=0.6.2", features = ["algos", "gql"] }
-grafeo-adapters = { version = "=0.6.2", features = ["gql", "algos"] }
-grafeo-core = "=0.6.2"
-grafeo-common = "=0.6.2"
+grafeo-engine = { version = "=0.6.3", features = ["algos", "gql"] }
+grafeo-adapters = { version = "=0.6.3", features = ["gql", "algos"] }
+grafeo-core = "=0.6.3"
+grafeo-common = "=0.6.3"
 
 # GPU. The CUDA version is fixed rather than read from nvcc at build time, so
 # builds need no CUDA toolkit and do not depend on the machine they run on.
@@ -59,12 +58,15 @@ clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
-# Testing & benchmarks
-criterion = "0.8"
+# Testing
 proptest = "1"
 
 [workspace.lints.rust]
 unsafe_code = "warn"
+
+[workspace.lints.cargo]
+# Needs a build with all features to see every use (CI builds the feature matrix).
+unused_dependencies = "deny"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

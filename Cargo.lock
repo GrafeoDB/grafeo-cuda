@@ -162,9 +162,9 @@ dependencies = [
 
 [[package]]
 name = "bumpalo"
-version = "3.20.3"
+version = "3.20.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
+checksum = "87a0cf66fd1eb2fb7b822cb78370d82303750809bc6ba855f3f58e517d3238db"
 
 [[package]]
 name = "bytes"
@@ -458,9 +458,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-adapters"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca11785dbcfd3f5c9c32475ab7722e3da0fdcbfbcb535dff98a245fc245f9145"
+checksum = "9a220ac12ce7aade26f4f7f6527e7e478d0d5bb40b1ea89db99a6372e46cfdef"
 dependencies = [
  "grafeo-common",
  "grafeo-core",
@@ -470,9 +470,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-common"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa27dcea8a70c2ce83fc751c3022fb207a2b68066ce52364f60c081863026e59"
+checksum = "13d340edc5bb7d445358238f08847c5c38411d5e8b58a93c1f58f2f3c7f1c3e2"
 dependencies = [
  "arcstr",
  "bincode",
@@ -494,9 +494,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-core"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6de07617c96d44d033929522946c2238a74210c07024f3ac14fab17d6263a22"
+checksum = "c9c2266a7e15b5cc98acc7efd6e834fc57ad878b6059b5e31553e3286459cfb0"
 dependencies = [
  "arcstr",
  "bincode",
@@ -518,7 +518,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cuda-algos"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "clap",
  "cudarc",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cuda-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "cudarc",
  "grafeo-common",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "grafeo-cuda-python"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "grafeo-cuda-algos",
  "grafeo-cuda-core",
@@ -557,9 +557,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-engine"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0500f98699d74a6c3aa966ade00f5ca242c20ecfbcf5fa677c2ae7a5a483c72f"
+checksum = "0a6ee5fad8b3bc169253bbe7be3895a540ca5651a8a10c0768cb8789b0bbaf5a"
 dependencies = [
  "arcstr",
  "bincode",
@@ -580,9 +580,9 @@ dependencies = [
 
 [[package]]
 name = "grafeo-storage"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "31d074f2ce89c265ceae49061121191fe2ffa74e5ddffcd67f2941b96e30af92"
+checksum = "322a9175fa727457e6e80047194ad41149cc8e8ec5435a42e7e3dc34a2302e9f"
 dependencies = [
  "bincode",
  "bytes",
@@ -1092,9 +1092,9 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "smallvec"
-version = "1.16.3"
+version = "1.16.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
+checksum = "149309498a5f7334b12ddae0cad8aba81ce785fe91755068867e017cf98fee46"
 
 [[package]]
 name = "strsim"

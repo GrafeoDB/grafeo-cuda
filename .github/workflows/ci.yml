@@ -70,11 +70,11 @@ jobs:
         run: .venv/bin/python -c "import sys, grafeo_cuda; assert grafeo_cuda.GpuDevice and grafeo_cuda.GpuGraph; print(sys.version, grafeo_cuda.__file__)"
 
   msrv:
-    name: MSRV (1.99.0)
+    name: MSRV (1.100.0)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.99.0
+      - uses: dtolnay/rust-toolchain@1.100.0
       - uses: Swatinem/rust-cache@v2
       - name: Check
         run: cargo check --workspace --all-targets
