@@ -33,10 +33,10 @@ grafeo-cuda-algos = { path = "crates/grafeo-cuda-algos", version = "0.2.0" }
 # Implementation crates may change their API in any release, so they are pinned
 # with `=` and bumped deliberately together. To build against a local Grafeo
 # checkout, uncomment the `[patch.crates-io]` section at the bottom of this file.
-grafeo-engine = { version = "=0.6.2", features = ["algos", "gql"] }
-grafeo-adapters = { version = "=0.6.2", features = ["gql", "algos"] }
-grafeo-core = "=0.6.2"
-grafeo-common = "=0.6.2"
+grafeo-engine = { version = "=0.6.3", features = ["algos", "gql"] }
+grafeo-adapters = { version = "=0.6.3", features = ["gql", "algos"] }
+grafeo-core = "=0.6.3"
+grafeo-common = "=0.6.3"
 
 # GPU. The CUDA version is fixed rather than read from nvcc at build time, so
 # builds need no CUDA toolkit and do not depend on the machine they run on.

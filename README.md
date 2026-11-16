@@ -42,9 +42,9 @@ the MSVC build tools), see [CUDA kernels and PTX](#cuda-kernels-and-ptx).
 
 ### Grafeo dependency
 
-grafeo-cuda 0.2 works with Grafeo 0.6. Grafeo comes from crates.io. The
+grafeo-cuda 0.3 works with Grafeo 0.6.3. Grafeo comes from crates.io. The
 workspace depends on the implementation crates `grafeo-engine`, `grafeo-core`
-and `grafeo-adapters`, pinned to an exact version (`=0.6.2`) because
+and `grafeo-adapters`, pinned to an exact version (`=0.6.3`) because
 their API may change in any Grafeo release. The stable `grafeo` crate does not
 yet re-export everything this workspace needs (`Direction`, used to walk edges
 through `GraphStore`, and the CPU reference algorithms used by the tests). Bump
